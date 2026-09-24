@@ -35,6 +35,24 @@ struct EngineConfig: Codable, Identifiable, Equatable {
     
     // 默认提示词
     static let defaultSystemPrompt = "You are a professional translator. Translate the user's text to {{TARGET_LANG}}. Only output the translated text directly. Do not add any explanations, notes, or punctuation that wasn't in the original text."
+    
+    // MARK: - API Key 解析
+    
+    /// 解析实际用于请求的 API Key。
+    ///
+    /// 解析顺序：
+    /// 1. 「设置」中为该引擎保存的 Key（存在 UserDefaults 里）；
+    /// 2. 环境变量 `KOK_API_KEY_<引擎名>`，引擎名转大写、非字母数字字符替换为下划线。
+    ///
+    /// 例：名为 `Qwen` 的引擎读取 `KOK_API_KEY_QWEN`。
+    /// 源码中不预置任何真实 Key，仓库里也不会出现凭据。
+    var resolvedAPIKey: String {
+        if !apiKey.isEmpty { return apiKey }
+        let suffix = name.uppercased().map { ch -> Character in
+            (ch.isLetter || ch.isNumber) ? ch : "_"
+        }
+        return ProcessInfo.processInfo.environment["KOK_API_KEY_\(String(suffix))"] ?? ""
+    }
 }
 
 // MARK: - 引擎配置管理器
@@ -134,7 +152,7 @@ class EngineManager: ObservableObject {
                 name: "DeepL",
                 type: .deepL,
                 apiURL: "https://api-free.deepl.com/v2/translate",
-                apiKey: "a116b38d-f049-45af-a42b-2f7bda9402f9:fx",
+                apiKey: "",
                 modelName: "",
                 systemPrompt: "",
                 isEnabled: true
@@ -144,7 +162,7 @@ class EngineManager: ObservableObject {
                 name: "Gemini",
                 type: .gemini,
                 apiURL: "https://generativelanguage.googleapis.com/v1beta/models/{{MODEL}}:generateContent",
-                apiKey: "AIzaSyCEc2wUrfjTUdP8sxkFjIP3jKN_jkPEt3c",
+                apiKey: "",
                 modelName: "gemini-2.0-flash",
                 systemPrompt: EngineConfig.defaultSystemPrompt,
                 isEnabled: true
@@ -154,7 +172,7 @@ class EngineManager: ObservableObject {
                 name: "Qwen",
                 type: .openAICompatible,
                 apiURL: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-                apiKey: "sk-86e422a45e484637a054a9dc3a26bffb",
+                apiKey: "",
                 modelName: "qwen-turbo",
                 systemPrompt: EngineConfig.defaultSystemPrompt,
                 isEnabled: true
@@ -181,7 +199,7 @@ class UnifiedTranslationService {
     // MARK: - DeepL
     
     private func translateWithDeepL(text: String, targetLang: String, config: EngineConfig) async throws -> TranslationResult {
-        guard !config.apiKey.isEmpty else {
+        guard !config.resolvedAPIKey.isEmpty else {
             throw ServiceError.missingAPIKey(config.name)
         }
         
@@ -189,7 +207,7 @@ class UnifiedTranslationService {
         
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("DeepL-Auth-Key \(config.apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("DeepL-Auth-Key \(config.resolvedAPIKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
         let body: [String: Any] = ["text": [text], "target_lang": targetLang]
@@ -213,7 +231,7 @@ class UnifiedTranslationService {
     // MARK: - OpenAI 兼容（通义千问 / DeepSeek / Moonshot / GPT 等）
     
     private func translateWithOpenAI(text: String, targetLang: String, config: EngineConfig) async throws -> TranslationResult {
-        guard !config.apiKey.isEmpty else {
+        guard !config.resolvedAPIKey.isEmpty else {
             throw ServiceError.missingAPIKey(config.name)
         }
         
@@ -221,7 +239,7 @@ class UnifiedTranslationService {
         
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(config.resolvedAPIKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
         let prompt = resolvePrompt(config: config, targetLang: targetLang)
@@ -262,14 +280,14 @@ class UnifiedTranslationService {
     // MARK: - Gemini
     
     private func translateWithGemini(text: String, targetLang: String, config: EngineConfig) async throws -> TranslationResult {
-        guard !config.apiKey.isEmpty else {
+        guard !config.resolvedAPIKey.isEmpty else {
             throw ServiceError.missingAPIKey(config.name)
         }
         
         // 替换 URL 中的 {{MODEL}} 占位符
         let urlString = config.apiURL
             .replacingOccurrences(of: "{{MODEL}}", with: config.modelName)
-            + "?key=\(config.apiKey)"
+            + "?key=\(config.resolvedAPIKey)"
         
         guard let url = URL(string: urlString) else { throw URLError(.badURL) }
         

@@ -31,10 +31,21 @@ struct EngineConfig: Codable, Identifiable, Equatable {
         case deepL = "DeepL"                    // DeepL 专用协议
         case openAICompatible = "OpenAI 兼容"    // OpenAI / 通义千问 / DeepSeek / Moonshot 等
         case gemini = "Gemini"                   // Google Gemini 协议
+        
+        /// 是否支持多轮对话（DeepL 是翻译专用协议，不能对话）
+        var supportsChat: Bool {
+            switch self {
+            case .deepL: return false
+            case .openAICompatible, .gemini: return true
+            }
+        }
     }
     
     // 默认提示词
     static let defaultSystemPrompt = "You are a professional translator. Translate the user's text to {{TARGET_LANG}}. Only output the translated text directly. Do not add any explanations, notes, or punctuation that wasn't in the original text."
+    
+    // 默认对话提示词（与翻译提示词互不干扰）
+    static let defaultChatSystemPrompt = "You are a concise, helpful assistant. Answer directly in the user's language. Prefer short paragraphs and bullet points, and use fenced code blocks for code."
     
     // MARK: - API Key 解析
     
@@ -63,18 +74,37 @@ class EngineManager: ObservableObject {
     @Published var engines: [EngineConfig] = []
     @Published var selectedEngineId: UUID?
     @Published var globalSystemPrompt: String = ""
+    @Published var chatEngineId: UUID?
+    @Published var chatSystemPrompt: String = ""
     
     private var cancellables = Set<AnyCancellable>()
     private let enginesKey = "engine_configs"
     private let selectedKey = "selected_engine_id"
+    private let chatEngineKey = "chat_engine_id"
+    private let chatPromptKey = "chat_system_prompt"
     
     var selectedEngine: EngineConfig? {
         engines.first { $0.id == selectedEngineId }
     }
     
+    /// 可用于多轮对话的引擎（DeepL 除外）
+    var chatEngines: [EngineConfig] {
+        engines.filter { $0.isEnabled && $0.type.supportsChat }
+    }
+    
+    /// 当前对话引擎：优先用户指定，否则取第一个可用项
+    var selectedChatEngine: EngineConfig? {
+        if let id = chatEngineId, let engine = chatEngines.first(where: { $0.id == id }) {
+            return engine
+        }
+        return chatEngines.first
+    }
+    
     private init() {
         self.globalSystemPrompt = UserDefaults.standard.string(forKey: "global_system_prompt")
             ?? EngineConfig.defaultSystemPrompt
+        self.chatSystemPrompt = UserDefaults.standard.string(forKey: chatPromptKey)
+            ?? EngineConfig.defaultChatSystemPrompt
         loadEngines()
         
         // 监听 globalSystemPrompt 变化，自动持久化
@@ -84,6 +114,19 @@ class EngineManager: ObservableObject {
                 UserDefaults.standard.set(newValue, forKey: "global_system_prompt")
             }
             .store(in: &cancellables)
+        
+        // 对话提示词同理
+        $chatSystemPrompt
+            .dropFirst()
+            .sink { newValue in
+                UserDefaults.standard.set(newValue, forKey: self.chatPromptKey)
+            }
+            .store(in: &cancellables)
+    }
+    
+    func selectChatEngine(id: UUID) {
+        chatEngineId = id
+        UserDefaults.standard.set(id.uuidString, forKey: chatEngineKey)
     }
     
     // MARK: - 持久化
@@ -111,6 +154,11 @@ class EngineManager: ObservableObject {
             self.selectedEngineId = id
         } else {
             self.selectedEngineId = engines.first?.id
+        }
+        
+        if let idString = UserDefaults.standard.string(forKey: chatEngineKey),
+           let id = UUID(uuidString: idString) {
+            self.chatEngineId = id
         }
         
         saveEngines()
@@ -335,19 +383,26 @@ class UnifiedTranslationService {
         return template.replacingOccurrences(of: "{{TARGET_LANG}}", with: langName)
     }
     
-    // MARK: - 错误类型
+}
+
+// MARK: - 错误类型（翻译与对话共用）
+
+enum ServiceError: LocalizedError {
+    case missingAPIKey(String)
+    case apiError(String, String)
+    case unsupportedEngine(String)
+    case emptyResponse(String)
     
-    enum ServiceError: LocalizedError {
-        case missingAPIKey(String)
-        case apiError(String, String)
-        
-        var errorDescription: String? {
-            switch self {
-            case .missingAPIKey(let name):
-                return "请在设置中填入 \(name) 的 API Key"
-            case .apiError(let name, let detail):
-                return "\(name) 接口错误: \(detail)"
-            }
+    var errorDescription: String? {
+        switch self {
+        case .missingAPIKey(let name):
+            return "请在设置中填入 \(name) 的 API Key"
+        case .apiError(let name, let detail):
+            return "\(name) 接口错误: \(detail)"
+        case .unsupportedEngine(let name):
+            return "\(name) 不支持对话，请改用 OpenAI 兼容或 Gemini 引擎"
+        case .emptyResponse(let name):
+            return "\(name) 没有返回内容"
         }
     }
 }

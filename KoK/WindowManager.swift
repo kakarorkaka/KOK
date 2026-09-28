@@ -10,38 +10,21 @@ import SwiftUI
 import Carbon
 import ServiceManagement
 
+/// 翻译面板控制器。
+/// 面板创建、定位、点击外部/Esc 关闭等通用行为都在 `PanelController` 基类里。
 @MainActor
-class WindowManager: NSObject {
+final class WindowManager: PanelController {
     static let shared = WindowManager()
     
-    var panel: NSPanel?
     var viewModel = TranslationViewModel()
-    
-    private var clickMonitor: Any?
-    private var keyMonitor: Any?
-    private var isVisible: Bool { panel?.isVisible ?? false }
     
     private override init() {
         super.init()
         setupPanel()
     }
     
-    func setupPanel() {
-        panel = FloatingPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 100),
-            styleMask: [.nonactivatingPanel, .borderless],
-            backing: .buffered,
-            defer: false
-        )
-
-        panel?.level = .floating
-        panel?.backgroundColor = .clear
-        panel?.isOpaque = false
-        panel?.hasShadow = true
-        panel?.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel?.hidesOnDeactivate = false
-        panel?.minSize = NSSize(width: 300, height: 100)
-        panel?.maxSize = NSSize(width: 800, height: 800)
+    private func setupPanel() {
+        makePanel()
         
         var contentView = TranslationView(viewModel: viewModel)
         
@@ -53,12 +36,16 @@ class WindowManager: NSObject {
             self?.replaceSelection()
         }
         
-        // #1: 关闭按钮回调
         contentView.onDismiss = { [weak self] in
             self?.hideWindow()
         }
         
-        panel?.contentView = NSHostingView(rootView: contentView)
+        installContent(contentView)
+        
+        // 与对话面板互斥
+        onWillShow = {
+            ChatPanelController.shared.hideWindow()
+        }
     }
     
     func updateWindowFrame(height: CGFloat) {
@@ -89,8 +76,8 @@ class WindowManager: NSObject {
     
     // MARK: - 核心逻辑
     
+    /// 复制当前选中文本并翻译。#9: 若面板已显示，再次触发则关闭
     func toggleTranslation() {
-        // #9: 如果面板已显示，再次触发快捷键则关闭
         if isVisible {
             hideWindow()
             return
@@ -101,7 +88,7 @@ class WindowManager: NSObject {
             print("缺少辅助功能权限")
             return
         }
-
+        
         // 2. 记录旧的 changeCount
         let pasteboard = NSPasteboard.general
         let oldChangeCount = pasteboard.changeCount
@@ -139,77 +126,6 @@ class WindowManager: NSObject {
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             self.checkClipboardChange(oldChangeCount: oldChangeCount, attempt: attempt + 1)
-        }
-    }
-    
-    // #8: 智能定位，防止超出屏幕
-    func showWindow() {
-        guard let panel = panel, let screen = NSScreen.main else { return }
-        let mouseLoc = NSEvent.mouseLocation
-        let screenFrame = screen.visibleFrame
-        let panelWidth: CGFloat = 400
-        let panelHeight: CGFloat = max(panel.frame.height, 100)
-        
-        var x = mouseLoc.x + 10
-        var y = mouseLoc.y - panelHeight
-        
-        // 右侧超出 → 弹到左边
-        if x + panelWidth > screenFrame.maxX {
-            x = mouseLoc.x - panelWidth - 10
-        }
-        // 左侧超出 → 贴左边
-        if x < screenFrame.minX {
-            x = screenFrame.minX + 5
-        }
-        // 底部超出 → 弹到上方
-        if y < screenFrame.minY {
-            y = mouseLoc.y + 10
-        }
-        // 顶部超出
-        if y + panelHeight > screenFrame.maxY {
-            y = screenFrame.maxY - panelHeight
-        }
-        
-        panel.setFrameOrigin(NSPoint(x: x, y: y))
-        panel.makeKeyAndOrderFront(nil)
-        NSApp.activate()
-        
-        startMonitors()
-    }
-    
-    func hideWindow() {
-        panel?.orderOut(nil)
-        stopMonitors()
-    }
-    
-    // MARK: - 事件监听
-    
-    private func startMonitors() {
-        stopMonitors()
-        
-        // 全局点击关闭
-        clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            self?.hideWindow()
-        }
-        
-        // #1: Esc 键关闭
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.keyCode == 53 { // Esc
-                self?.hideWindow()
-                return nil
-            }
-            return event
-        }
-    }
-    
-    private func stopMonitors() {
-        if let monitor = clickMonitor {
-            NSEvent.removeMonitor(monitor)
-            clickMonitor = nil
-        }
-        if let monitor = keyMonitor {
-            NSEvent.removeMonitor(monitor)
-            keyMonitor = nil
         }
     }
     

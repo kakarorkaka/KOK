@@ -26,9 +26,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindow: NSWindow?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // 1. 初始化快捷键
-        HotKeyManager.shared.onTrigger = {
+        // 1. 注册全局快捷键（每个动作一个）
+        HotKeyManager.shared.handlers[.translate] = {
             WindowManager.shared.toggleTranslation()
+        }
+        HotKeyManager.shared.handlers[.chat] = {
+            ChatPanelController.shared.toggleChat()
         }
         
         // 2. 初始化状态栏
@@ -56,6 +59,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if event.type == .rightMouseUp {
             let menu = NSMenu()
             
+            let chatItem = NSMenuItem(title: "打开对话", action: #selector(openChat), keyEquivalent: "")
+            menu.addItem(chatItem)
+            
+            menu.addItem(NSMenuItem.separator())
+            
             let launchItem = NSMenuItem(title: "开机自启动", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
             launchItem.state = isLaunchAtLoginEnabled() ? .on : .off
             menu.addItem(launchItem)
@@ -69,6 +77,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // 左键点击 → 打开设置
             openSettings()
         }
+    }
+    
+    @objc func openChat() {
+        ChatPanelController.shared.toggleChat()
     }
     
     @objc func openSettings() {

@@ -49,10 +49,16 @@ struct GeneralSettingsTab: View {
             HStack {
                 Text("翻译快捷键:")
                 Spacer()
-                ShortcutRecorder()
+                ShortcutRecorder(action: .translate)
             }
             
-            Text("点击上方按钮，然后按下你想要的快捷键组合。")
+            HStack {
+                Text("对话快捷键:")
+                Spacer()
+                ShortcutRecorder(action: .chat)
+            }
+            
+            Text("点击上方按钮，然后按下你想要的快捷键组合。\n翻译会读取当前选中的文本；对话会直接弹出输入框。\n若快捷键没反应，多半是被 iShot 等工具占用，换一个组合后点「测试」验证。")
                 .font(.caption)
                 .foregroundColor(.secondary)
             
@@ -611,78 +617,157 @@ struct PromptSettingsTab: View {
     @State private var showSaved = false
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("全局系统提示词")
-                .font(.headline)
-            
-            Text("此提示词将应用于所有 LLM 引擎（DeepL 除外）。\n留空则使用各引擎自己的提示词。")
-                .font(.caption)
-                .foregroundColor(.secondary)
-            
-            Divider()
-            
-            TextEditor(text: $manager.globalSystemPrompt)
-                .font(.system(size: 12, design: .monospaced))
-                .border(Color.gray.opacity(0.3))
-            
-            HStack {
-                Text("可用变量: {{TARGET_LANG}} = 目标语言名称")
-                    .font(.caption2)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                // --- 翻译提示词 ---
+                Text("翻译系统提示词")
+                    .font(.headline)
+                
+                Text("此提示词将应用于所有 LLM 翻译引擎（DeepL 除外）。\n留空则使用各引擎自己的提示词。")
+                    .font(.caption)
                     .foregroundColor(.secondary)
                 
-                Spacer()
+                TextEditor(text: $manager.globalSystemPrompt)
+                    .font(.system(size: 12, design: .monospaced))
+                    .frame(height: 110)
+                    .border(Color.gray.opacity(0.3))
                 
-                if showSaved {
-                    Text("已保存")
-                        .font(.caption)
-                        .foregroundColor(.green)
-                        .transition(.opacity)
-                }
-                
-                Button("恢复默认") {
-                    manager.globalSystemPrompt = EngineConfig.defaultSystemPrompt
-                }
-                .font(.caption)
-                
-                Button("保存") {
-                    // globalSystemPrompt 通过 Combine sink 自动持久化，这里触发反馈
-                    UserDefaults.standard.set(manager.globalSystemPrompt, forKey: "global_system_prompt")
-                    withAnimation { showSaved = true }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        withAnimation { showSaved = false }
+                HStack {
+                    Text("可用变量: {{TARGET_LANG}} = 目标语言名称")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    
+                    Spacer()
+                    
+                    Button("恢复默认") {
+                        manager.globalSystemPrompt = EngineConfig.defaultSystemPrompt
                     }
+                    .font(.caption)
                 }
-                .buttonStyle(.borderedProminent)
-                .font(.caption)
+                
+                Divider()
+                
+                // --- 对话提示词 ---
+                Text("对话系统提示词")
+                    .font(.headline)
+                
+                Text("仅用于快速问答面板，与上面的翻译提示词互不影响。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                
+                TextEditor(text: $manager.chatSystemPrompt)
+                    .font(.system(size: 12, design: .monospaced))
+                    .frame(height: 90)
+                    .border(Color.gray.opacity(0.3))
+                
+                HStack {
+                    Spacer()
+                    
+                    if showSaved {
+                        Text("已保存")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                            .transition(.opacity)
+                    }
+                    
+                    Button("恢复默认") {
+                        manager.chatSystemPrompt = EngineConfig.defaultChatSystemPrompt
+                    }
+                    .font(.caption)
+                    
+                    Button("保存") {
+                        // 两个提示词都通过 Combine sink 自动持久化，这里只是给个反馈
+                        UserDefaults.standard.set(manager.globalSystemPrompt, forKey: "global_system_prompt")
+                        UserDefaults.standard.set(manager.chatSystemPrompt, forKey: "chat_system_prompt")
+                        withAnimation { showSaved = true }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                            withAnimation { showSaved = false }
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .font(.caption)
+                }
             }
+            .padding()
         }
-        .padding()
     }
 }
 
 // MARK: - 快捷键录制器
 
 struct ShortcutRecorder: View {
+    var action: HotKeyAction = .translate
+    
     @ObservedObject var manager = HotKeyManager.shared
     @State private var isRecording = false
+    @State private var testState: TestState = .idle
+    
+    private enum TestState: Equatable {
+        case idle
+        case waiting
+        case passed
+        case failed
+    }
     
     var keyString: String {
-        guard let key = manager.currentKey, let modifiers = manager.currentModifiers else {
+        guard let shortcut = manager.shortcut(for: action) else {
             return "未设置"
         }
-        return "\(modifiersString(modifiers))\(keyName(for: key))"
+        return "\(modifiersString(shortcut.modifiers))\(keyName(for: shortcut.key))"
     }
     
     var body: some View {
-        Button(action: {
-            startRecording()
-        }) {
-            Text(isRecording ? "请输入快捷键..." : keyString)
-                .frame(width: 140)
+        HStack(spacing: 8) {
+            Button(action: {
+                startRecording()
+            }) {
+                Text(isRecording ? "请输入快捷键..." : keyString)
+                    .frame(width: 140)
+            }
+            .buttonStyle(.bordered)
+            .tint(isRecording ? .blue : .primary)
+            .background(KeyMonitor(isRecording: $isRecording, action: action))
+            
+            Button("测试") { startTest() }
+                .font(.caption)
+                .disabled(isRecording || testState == .waiting)
+            
+            Group {
+                switch testState {
+                case .idle:
+                    EmptyView()
+                case .waiting:
+                    Text("请按下快捷键…")
+                        .foregroundColor(.secondary)
+                case .passed:
+                    Label("生效", systemImage: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                case .failed:
+                    Label("未收到，可能被其它 App 占用", systemImage: "xmark.circle.fill")
+                        .foregroundColor(.red)
+                }
+            }
+            .font(.caption)
         }
-        .buttonStyle(.bordered)
-        .tint(isRecording ? .blue : .primary)
-        .background(KeyMonitor(isRecording: $isRecording))
+    }
+    
+    /// macOS 不提供「快捷键是否被别的 App 占用」的查询接口，
+    /// 注册冲突时也不会报错，所以只能让用户按一次来实测。
+    private func startTest() {
+        testState = .waiting
+        
+        HotKeyManager.shared.testObserver = { triggered in
+            guard triggered == action else { return }
+            HotKeyManager.shared.testObserver = nil
+            testState = .passed
+        }
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+            if HotKeyManager.shared.testObserver != nil {
+                HotKeyManager.shared.testObserver = nil
+                testState = .failed
+            }
+        }
     }
     
     func startRecording() {
@@ -723,6 +808,7 @@ struct ShortcutRecorder: View {
 
 struct KeyMonitor: NSViewRepresentable {
     @Binding var isRecording: Bool
+    var action: HotKeyAction = .translate
     
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
@@ -750,7 +836,7 @@ struct KeyMonitor: NSViewRepresentable {
                 let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
                 
                 if let key = Key(carbonKeyCode: UInt32(keyCode)) {
-                    HotKeyManager.shared.register(key: key, modifiers: modifiers)
+                    HotKeyManager.shared.register(action, key: key, modifiers: modifiers)
                 }
                 
                 DispatchQueue.main.async {

@@ -1,20 +1,50 @@
-# KoK 翻译器
+# KoK
 
-一个 macOS 状态栏翻译工具：选中任意文本，按下快捷键即可在浮动面板中看到译文。
-支持多引擎（DeepL / Gemini / 任意 OpenAI 兼容服务）、翻译历史、全局与单引擎自定义提示词。
+一个 macOS 状态栏效率工具，目前有两件事：
+
+- **划词翻译**：选中任意文本，按快捷键在浮动面板中看译文；
+- **快速问答**：按快捷键弹出对话面板，直接打字问问题，流式返回。
+
+两者共用同一套引擎配置与 API Key。支持多引擎（DeepL / Gemini / 任意 OpenAI 兼容服务）、
+翻译历史、全局与单引擎自定义提示词。
 
 ## 功能
 
 - **多引擎**：数据驱动的引擎配置，可自由添加 / 编辑 / 删除引擎
-  - `DeepL` 专用协议
+  - `DeepL` 专用协议（仅翻译）
   - `Gemini`（Google Generative Language）
   - `OpenAI 兼容`：OpenAI、腾讯云 Token Plan、DeepSeek、通义千问、Moonshot、智谱等
 - **批量添加**：内置腾讯云 / OpenAI / DeepSeek / 智谱 / Moonshot 预设模板
-- **提示词**：全局系统提示词 + 每引擎单独提示词，支持 `{{TARGET_LANG}}` 变量
+- **提示词**：翻译与对话各自独立的系统提示词；翻译支持 `{{TARGET_LANG}}` 变量与每引擎单独提示词
 - **体验**：面板可拖拽调整大小、`Esc` 关闭、复制反馈、失败重试、切换引擎自动重译
 - **历史记录**：保留翻译历史
-- **状态栏**：左键打开设置，右键菜单可开关机自启动 / 退出
+- **快速问答**：独立快捷键唤出，流式输出、可中断 / 重生成 / 新对话，代码块自动分块并可复制
+- **状态栏**：左键打开设置，右键菜单可打开对话 / 开关机自启动 / 退出
 - **开机自启动**：基于 `SMAppService`
+
+## 快捷键
+
+| 动作 | 默认键 | 说明 |
+|---|---|---|
+| 翻译 | `⌥D` | 读取当前选中文本（需要「辅助功能」权限） |
+| 快速问答 | `⌥K` | 直接弹出输入框，**不需要**辅助功能权限 |
+
+两者都可在「设置 ▸ 通用」里重新录制。
+
+### ⚠️ 快捷键冲突（重要）
+
+macOS 的 `RegisterEventHotKey` 在组合被别的 App 占用时**不会返回错误**，事件会静默地
+被先注册方吃掉，表现就是「按了完全没反应」。
+
+已知 **iShot** 会占用 `⌥A`、`⌥B`、`⌥D`、`⌥E`、`⌥F`、`⌥G`、`⌥H`、`⌥O`、`⌥P`、`⌥Q`、
+`⌥R`、`⌥S`、`⌥T`、`⌥W`、`⌥X`、`⌥Z`。所以默认键避开了这些组合。
+
+设置页每个快捷键旁边都有 **「测试」** 按钮：点一下，然后按下该快捷键——
+
+- 显示 **生效** → 组合可用；
+- 显示 **未收到，可能被其它 App 占用** → 换一个组合重试。
+
+> 换个组合后建议顺手在占用方 App 里确认一下，避免两边抢同一个键。
 
 ## 环境要求
 
@@ -109,13 +139,18 @@ open /Applications/KoK.app
 KoK.xcodeproj/           # Xcode 工程
 KoK/                     # 源码（Xcode 同步文件夹）
 ├── KoKApp.swift         # App 入口 + AppDelegate（状态栏、开机自启动）
-├── HotKeyManager.swift  # 全局快捷键
-├── WindowManager.swift  # 翻译面板生命周期
-├── FloatingPanel.swift  # 无边框可缩放浮动面板
-├── TranslationService.swift     # 引擎配置模型 + 各协议请求实现
+├── HotKeyManager.swift  # 多动作全局快捷键（含自检钩子与旧配置迁移）
+├── PanelController.swift# 悬浮面板基类：定位、点击外部 / Esc 关闭
+├── FloatingPanel.swift  # 无边框可缩放 NSPanel
+├── WindowManager.swift  # 翻译面板控制器
+├── ChatPanelController.swift    # 对话面板控制器（与翻译面板互斥）
+├── TranslationService.swift     # 引擎配置模型 + 翻译协议实现 + 错误类型
+├── ChatService.swift    # 对话协议实现（OpenAI 兼容 / Gemini，SSE 流式 + 降级）
 ├── TranslationViewModel.swift   # 翻译状态与历史记录
+├── ChatViewModel.swift  # 对话状态（内存态，不落盘）
 ├── SettingsView.swift   # 设置界面（引擎管理、提示词、快捷键）
 ├── TranslationView.swift# 翻译面板界面
+├── ChatView.swift       # 对话面板界面 + 轻量 Markdown / 代码块
 └── Assets.xcassets/     # 图标与配色
 ```
 
@@ -124,9 +159,20 @@ KoK/                     # 源码（Xcode 同步文件夹）
 > 打包进 `KoK.app/Contents/Resources/`。例外文件需在 target 的
 > `PBXFileSystemSynchronizedBuildFileExceptionSet` 中登记（目前仅 `Info.plist`）。
 
+## 快速问答的边界
+
+为了保持轻量，以下都是**刻意不做**的：
+
+- 对话**不落盘**：只存在内存里，关掉面板保留、点「新对话」清空、退出 App 即消失；
+- 只保留最近 20 条消息（约 10 轮）作为上下文，避免 token 与费用失控；
+- 不引入 Markdown / 网络 / 状态管理第三方库，代码块分块用约 60 行手写解析；
+- 不支持多模态、文件上传、Agent 工具调用。
+
 ## 已知限制
 
 - 无自动化测试。
 - 应用未做 Developer ID 签名 / 公证，仅适合本机自用。
-- `NSAccessibility` 权限：读取选中文本需要授予「辅助功能」权限，首次使用时按提示在
-  「系统设置 ▸ 隐私与安全性 ▸ 辅助功能」中勾选 KoK。
+- `NSAccessibility` 权限：**只有翻译**读取选中文本需要授予「辅助功能」权限，首次使用时按提示在
+  「系统设置 ▸ 隐私与安全性 ▸ 辅助功能」中勾选 KoK。**快速问答不需要该权限。**
+- 部分 OpenAI 兼容服务不支持 `stream`，此时会自动降级为一次性返回；若仍失败，面板会显示
+  可重试的错误条。

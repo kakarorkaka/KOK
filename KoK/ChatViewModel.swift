@@ -20,6 +20,28 @@ final class ChatViewModel: ObservableObject {
     /// 每次面板弹出时自增，视图据此把焦点交给输入框
     @Published var focusRequest: Int = 0
     
+    /// 本次要附带的选中内容（文本 / 图片）
+    @Published var context: SelectionProvider.Capture?
+    /// 是否正在录音
+    @Published var isListening = false
+    /// 语音相关错误（权限、没听清等）
+    @Published var voiceError: String?
+    
+    let voice = VoiceInputService()
+    private var voiceTimeoutTask: Task<Void, Never>?
+    private var voiceStartTask: Task<Void, Never>?
+    /// 本次录音是否需要抓取选中内容
+    private var wantsSelection = false
+    private var cancellables = Set<AnyCancellable>()
+    
+    init() {
+        // voice 是内层 ObservableObject，它自己的变化不会触发外层视图刷新，
+        // 这里把它的变更转发出去，聆听时的实时转写才能显示出来。
+        voice.objectWillChange
+            .sink { [weak self] in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+    }
+    
     let engineManager = EngineManager.shared
     
     private let service = LLMClient()
@@ -58,8 +80,124 @@ final class ChatViewModel: ObservableObject {
         
         input = ""
         errorMessage = nil
-        messages.append(ChatMessage(role: .user, content: text))
+        messages.append(userMessage(text: text, context: context))
+        context = nil
         startStreaming(using: config)
+    }
+    
+    /// 把选中内容拼进用户消息：图片作为独立片段，文本带个前缀标明来源
+    private func userMessage(text: String, context: SelectionProvider.Capture?) -> ChatMessage {
+        var parts: [MessagePart] = []
+        
+        if let image = context?.image {
+            parts.append(.image(image))
+        }
+        if let selected = context?.text, !selected.isEmpty {
+            let note = context?.truncated == true ? "（已截断）" : ""
+            parts.append(.text("【选中内容\(note)】\n\(selected)\n\n"))
+        }
+        
+        parts.append(.text(text))
+        return ChatMessage(role: .user, parts: parts)
+    }
+    
+    // MARK: - 按住说话
+    
+    /// 按下快捷键：立刻开录（用户已经在说话了），抓选中内容并行进行
+    /// - Parameter captureSelection: 是否顺带抓取当前选中内容。
+    ///   只有全局快捷键那条路径该传 true——从面板里点麦克风时，
+    ///   焦点已经在 KoK 自己身上，抓到的会是输入框里的文字。
+    func beginVoice(captureSelection: Bool = true) {
+        guard !isListening else { return }
+        
+        voiceError = nil
+        errorMessage = nil
+        isListening = true
+        wantsSelection = captureSelection
+        
+        // 首次使用会在这里弹系统权限对话框，所以录音启动是异步的；
+        // endVoiceAndSend 会等这个任务结束再收尾。
+        voiceStartTask?.cancel()
+        voiceStartTask = Task { [weak self] in
+            guard let self else { return }
+            
+            if VoiceInputService.needsPermission {
+                let granted = await VoiceInputService.requestPermissions()
+                guard granted.microphone && granted.speech else {
+                    self.voiceError = granted.microphone
+                        ? VoiceInputService.VoiceError.speechDenied.localizedDescription
+                        : VoiceInputService.VoiceError.microphoneDenied.localizedDescription
+                    self.isListening = false
+                    return
+                }
+            }
+            
+            guard !Task.isCancelled else { return }
+            
+            do {
+                try self.voice.start(localeIdentifier: self.engineManager.voiceLocale)
+            } catch {
+                self.voiceError = error.localizedDescription
+                self.isListening = false
+            }
+        }
+        
+        // 兜底：万一「松开」事件丢了，录音也不能一直开着
+        voiceTimeoutTask?.cancel()
+        voiceTimeoutTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(VoiceInputService.maxRecordingSeconds * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.endVoiceAndSend()
+        }
+    }
+    
+    /// 松开快捷键：结束录音，带上选中内容一起发出去
+    func endVoiceAndSend() {
+        guard isListening else { return }
+        isListening = false
+        voiceTimeoutTask?.cancel()
+        voiceTimeoutTask = nil
+        
+        let shouldCapture = wantsSelection
+        wantsSelection = false
+        
+        Task { [weak self] in
+            guard let self else { return }
+            
+            // 等录音真正开始（可能刚才在弹权限对话框）
+            await self.voiceStartTask?.value
+            self.voiceStartTask = nil
+            
+            // 启动阶段已经报过错（权限被拒、没有输入设备），就不要再覆盖成「没听清」
+            guard self.voiceError == nil else { return }
+            
+            var captured: SelectionProvider.Capture?
+            if shouldCapture {
+                // 松手后等一下再抓：让 ⌥ 彻底松开，
+                // 否则合成出来的是 ⌥⌘C，很多 App 不认
+                try? await Task.sleep(nanoseconds: 80_000_000)
+                captured = await SelectionProvider.capture()
+            }
+            
+            let spoken = await self.voice.finish()
+            
+            if let captured, !captured.isEmpty {
+                self.context = captured
+            }
+            
+            let text = spoken.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else {
+                self.voiceError = "没听清，再按一次试试"
+                return
+            }
+            
+            self.input = text
+            self.send()
+        }
+    }
+    
+    func removeContext() {
+        context = nil
     }
     
     func regenerate() {
@@ -132,7 +270,7 @@ final class ChatViewModel: ObservableObject {
     
     private func append(_ chunk: String, to id: UUID) {
         guard let index = messages.firstIndex(where: { $0.id == id }) else { return }
-        messages[index].content += chunk
+        messages[index].appendText(chunk)
     }
     
     private func discardEmptyPlaceholder(_ id: UUID) {

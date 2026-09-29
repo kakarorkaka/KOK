@@ -16,6 +16,8 @@ import Combine
 enum HotKeyAction: String, CaseIterable, Identifiable {
     case translate
     case chat
+    /// 按住说话：按下开始录音、松开结束并发送
+    case voice
     
     var id: String { rawValue }
     
@@ -23,6 +25,15 @@ enum HotKeyAction: String, CaseIterable, Identifiable {
         switch self {
         case .translate: return "翻译"
         case .chat: return "对话"
+        case .voice: return "语音"
+        }
+    }
+    
+    /// 说明文字，用在设置页的注释里
+    var hint: String? {
+        switch self {
+        case .voice: return "按住说话，松开后连同选中内容一起发送"
+        default: return nil
         }
     }
     
@@ -35,6 +46,7 @@ enum HotKeyAction: String, CaseIterable, Identifiable {
         switch self {
         case .translate: return (.d, [.option])
         case .chat: return (.one, [.command])
+        case .voice: return (.v, [.option])
         }
     }
 }
@@ -48,8 +60,11 @@ enum HotKeyAction: String, CaseIterable, Identifiable {
 class HotKeyManager: ObservableObject {
     static let shared = HotKeyManager()
     
-    /// 每个动作的触发回调
+    /// 每个动作的按下回调
     var handlers: [HotKeyAction: () -> Void] = [:]
+    
+    /// 每个动作的松开回调（只有「按住说话」需要）
+    var releaseHandlers: [HotKeyAction: () -> Void] = [:]
     
     /// 设置页自检用：安装后，快捷键触发只回调这里，不执行真实动作。
     /// 系统不提供「这个组合是否被别的 App 占用」的查询接口，只能实测。
@@ -107,6 +122,7 @@ class HotKeyManager: ObservableObject {
         let modifiers = modifiers.intersection(.deviceIndependentFlagsMask)
         
         let hotKey = HotKey(key: key, modifiers: modifiers)
+        
         hotKey.keyDownHandler = { [weak self] in
             guard let self else { return }
             // 自检期间吞掉真实动作，避免触发翻译/弹窗
@@ -115,6 +131,11 @@ class HotKeyManager: ObservableObject {
                 return
             }
             self.handlers[action]?()
+        }
+        
+        // 「按住说话」靠它判断松手
+        hotKey.keyUpHandler = { [weak self] in
+            self?.releaseHandlers[action]?()
         }
         
         hotKeys[action] = hotKey

@@ -12,6 +12,13 @@ import Foundation
 
 // MARK: - 消息
 
+/// 消息里的一段内容。模型看不到"字符串"，只看得到有序片段：
+/// 纯文字是一个 text，图片是一个 image。
+enum MessagePart: Equatable {
+    case text(String)
+    case image(ImageAttachment)
+}
+
 /// 一条消息。翻译也复用它：system 放提示词，user 放原文。
 struct ChatMessage: Identifiable, Equatable {
     enum Role: String, Codable {
@@ -22,12 +29,41 @@ struct ChatMessage: Identifiable, Equatable {
     
     let id: UUID
     var role: Role
-    var content: String
+    var parts: [MessagePart]
     
-    init(id: UUID = UUID(), role: Role, content: String) {
+    /// 纯文字部分拼起来（UI 展示、历史记录、提示词都读它）
+    var content: String {
+        parts.compactMap { part in
+            if case .text(let text) = part { return text }
+            return nil
+        }.joined()
+    }
+    
+    var hasImage: Bool {
+        parts.contains { part in
+            if case .image = part { return true }
+            return false
+        }
+    }
+    
+    init(id: UUID = UUID(), role: Role, parts: [MessagePart]) {
         self.id = id
         self.role = role
-        self.content = content
+        self.parts = parts
+    }
+    
+    /// 纯文本便捷构造（翻译、连通性测试、系统提示词都走这里）
+    init(id: UUID = UUID(), role: Role, content: String) {
+        self.init(id: id, role: role, parts: [.text(content)])
+    }
+    
+    /// 流式追加：接着最后一段文字往后拼
+    mutating func appendText(_ chunk: String) {
+        if case .text(let existing)? = parts.last {
+            parts[parts.count - 1] = .text(existing + chunk)
+        } else {
+            parts.append(.text(chunk))
+        }
     }
 }
 
@@ -195,12 +231,34 @@ class LLMClient {
         
         var body: [String: Any] = [
             "model": config.modelName,
-            "messages": messages.map { ["role": $0.role.rawValue, "content": $0.content] }
+            "messages": messages.map { message in
+                ["role": message.role.rawValue, "content": openAIContent(message.parts)]
+            }
         ]
         if stream { body["stream"] = true }
         
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         return request
+    }
+    
+    /// 纯文字就发字符串（兼容性最好，也能吃到前缀缓存）；
+    /// 带图片才升级成 content 数组，这是 OpenAI 的多模态格式。
+    private func openAIContent(_ parts: [MessagePart]) -> Any {
+        if parts.count == 1, case .text(let text) = parts[0] {
+            return text
+        }
+        
+        return parts.map { part -> [String: Any] in
+            switch part {
+            case .text(let text):
+                return ["type": "text", "text": text]
+            case .image(let image):
+                return [
+                    "type": "image_url",
+                    "image_url": ["url": "data:\(image.mimeType);base64,\(image.base64)"],
+                ]
+            }
+        }
     }
     
     private func makeGeminiRequest(
@@ -229,20 +287,44 @@ class LLMClient {
             switch message.role {
             case .system:
                 systemText = (systemText.map { $0 + "\n" } ?? "") + message.content
+                
             case .user:
-                var text = message.content
-                if let pending = systemText {
-                    text = "\(pending)\n\n\(text)"
-                    systemText = nil
-                }
-                contents.append(["role": "user", "parts": [["text": text]]])
+                let parts = geminiParts(message.parts, prepending: systemText)
+                systemText = nil
+                contents.append(["role": "user", "parts": parts])
+                
             case .assistant:
-                contents.append(["role": "model", "parts": [["text": message.content]]])
+                contents.append(["role": "model", "parts": geminiParts(message.parts)])
             }
         }
         
         request.httpBody = try JSONSerialization.data(withJSONObject: ["contents": contents])
         return request
+    }
+    
+    /// Gemini 的多模态格式：文字是 {"text": ...}，图片是 {"inline_data": {...}}
+    private func geminiParts(_ parts: [MessagePart], prepending prefix: String? = nil) -> [[String: Any]] {
+        var result: [[String: Any]] = []
+        
+        if let prefix, !prefix.isEmpty {
+            result.append(["text": prefix])
+        }
+        
+        for part in parts {
+            switch part {
+            case .text(let text):
+                result.append(["text": text])
+            case .image(let image):
+                result.append([
+                    "inline_data": [
+                        "mime_type": image.mimeType,
+                        "data": image.base64,
+                    ]
+                ])
+            }
+        }
+        
+        return result
     }
     
     // MARK: - 响应解析

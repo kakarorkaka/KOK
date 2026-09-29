@@ -32,6 +32,8 @@ struct SettingsView: View {
 // MARK: - Tab 1: 通用设置
 
 struct GeneralSettingsTab: View {
+    @AppStorage("voice_locale") private var voiceLocale = VoiceLocale.chinese.rawValue
+    
     @State private var launchAtLogin: Bool = {
         if #available(macOS 13.0, *) {
             return SMAppService.mainApp.status == .enabled
@@ -39,19 +41,43 @@ struct GeneralSettingsTab: View {
         return false
     }()
     
+    @State private var voiceAuthorized = false
+    
     var body: some View {
         Form {
             Section {
-                LabeledContent("翻译") {
-                    ShortcutRecorder(action: .translate)
-                }
-                LabeledContent("对话") {
-                    ShortcutRecorder(action: .chat)
+                ForEach(HotKeyAction.allCases) { action in
+                    LabeledContent(action.title) {
+                        ShortcutRecorder(action: action)
+                    }
                 }
             } header: {
                 Text("快捷键")
             } footer: {
-                Text("翻译读取选中文字，对话直接开输入框。没反应时点「测试」检查是否被别的 App 占用。")
+                Text("翻译读取选中文字，对话开输入框，语音按住说话。没反应时点「测试」检查是否被别的 App 占用。")
+            }
+            
+            Section {
+                Picker("识别语言", selection: $voiceLocale) {
+                    ForEach(VoiceLocale.allCases) { locale in
+                        Text(locale.title).tag(locale.rawValue)
+                    }
+                }
+                
+                if !voiceAuthorized {
+                    HStack(spacing: 8) {
+                        Label("需要麦克风与语音识别权限", systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                        Spacer()
+                        Button("去授权") { requestVoicePermission() }
+                            .controlSize(.small)
+                    }
+                }
+            } header: {
+                Text("语音")
+            } footer: {
+                Text("识别在本机完成，录音不出设备。首次使用时系统会弹权限询问。")
             }
             
             Section {
@@ -73,6 +99,18 @@ struct GeneralSettingsTab: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear { refreshVoicePermission() }
+    }
+    
+    private func refreshVoicePermission() {
+        voiceAuthorized = VoiceInputService.microphoneAuthorized && VoiceInputService.speechAuthorized
+    }
+    
+    private func requestVoicePermission() {
+        Task {
+            _ = await VoiceInputService.requestPermissions()
+            refreshVoicePermission()
+        }
     }
 }
 

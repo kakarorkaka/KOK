@@ -17,6 +17,7 @@ final class WindowManager: PanelController {
     static let shared = WindowManager()
     
     var viewModel = TranslationViewModel()
+    private var captureTask: Task<Void, Never>?
     
     private override init() {
         super.init()
@@ -76,27 +77,36 @@ final class WindowManager: PanelController {
     
     // MARK: - 核心逻辑
     
-    /// 复制当前选中文本并翻译。#9: 若面板已显示，再次触发则关闭
+    /// 复制当前选中文本并翻译。面板已显示时再次触发则关闭。
     func toggleTranslation() {
         if isVisible {
             hideWindow()
             return
         }
         
-        // 1. 检查辅助功能权限
         if !checkAccessibilityPermissions() {
             print("缺少辅助功能权限")
             return
         }
         
-        // 2. 记录旧的 changeCount
-        let pasteboard = NSPasteboard.general
-        let oldChangeCount = pasteboard.changeCount
-        
-        // 3. 模拟复制
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            self.simulateCopyCommand()
-            self.checkClipboardChange(oldChangeCount: oldChangeCount, attempt: 0)
+        captureTask?.cancel()
+        captureTask = Task { [weak self] in
+            guard let self else { return }
+            
+            // 等一下让快捷键的修饰键先松开，否则 ⌘C 会和它叠加
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            
+            let capture = await SelectionProvider.capture()
+            
+            guard !Task.isCancelled else { return }
+            
+            if let text = capture.text {
+                self.viewModel.translate(text: text)
+            } else {
+                // 选中的是图片，或者根本没选中
+                self.viewModel.showNoTextError()
+            }
+            self.showWindow()
         }
     }
     
@@ -106,52 +116,7 @@ final class WindowManager: PanelController {
         return accessEnabled
     }
     
-    private func checkClipboardChange(oldChangeCount: Int, attempt: Int) {
-        let pasteboard = NSPasteboard.general
-        
-        if pasteboard.changeCount != oldChangeCount {
-            if let copiedText = pasteboard.string(forType: .string), !copiedText.isEmpty {
-                self.viewModel.translate(text: copiedText)
-                self.showWindow()
-            }
-            return
-        }
-        
-        // #5: 超时后在面板中显示友好提示
-        if attempt > 20 {
-            self.viewModel.showNoTextError()
-            self.showWindow()
-            return
-        }
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            self.checkClipboardChange(oldChangeCount: oldChangeCount, attempt: attempt + 1)
-        }
-    }
-    
-    // MARK: - 键盘模拟
-    
-    private func simulateCopyCommand() {
-        let source = CGEventSource(stateID: .hidSystemState)
-        let cmdKey: CGKeyCode = 0x37
-        let cKey: CGKeyCode = 0x08
-        
-        guard let cmdDown = CGEvent(keyboardEventSource: source, virtualKey: cmdKey, keyDown: true) else { return }
-        cmdDown.flags = .maskCommand
-        cmdDown.post(tap: .cghidEventTap)
-        
-        guard let cDown = CGEvent(keyboardEventSource: source, virtualKey: cKey, keyDown: true) else { return }
-        cDown.flags = .maskCommand
-        cDown.post(tap: .cghidEventTap)
-        
-        guard let cUp = CGEvent(keyboardEventSource: source, virtualKey: cKey, keyDown: false) else { return }
-        cUp.flags = .maskCommand
-        cUp.post(tap: .cghidEventTap)
-        
-        guard let cmdUp = CGEvent(keyboardEventSource: source, virtualKey: cmdKey, keyDown: false) else { return }
-        cmdUp.flags = []
-        cmdUp.post(tap: .cghidEventTap)
-    }
+    // MARK: - 键盘模拟（替换原文用）
     
     private func simulatePasteCommand() {
         let source = CGEventSource(stateID: .hidSystemState)

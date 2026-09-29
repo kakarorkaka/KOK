@@ -25,6 +25,14 @@ struct ChatView: View {
                 Divider()
                 errorBanner(error)
             }
+            if let voiceError = viewModel.voiceError {
+                Divider()
+                voiceErrorBanner(voiceError)
+            }
+            if viewModel.isListening || viewModel.context != nil {
+                Divider()
+                contextBar
+            }
             Divider()
             inputBar
         }
@@ -226,6 +234,21 @@ struct ChatView: View {
                     return .handled
                 }
             
+            Button {
+                if viewModel.isListening {
+                    viewModel.endVoiceAndSend()
+                } else {
+                    // 从面板里点麦克风时不能再抓选中内容——焦点已经在 KoK 自己身上了
+                    viewModel.beginVoice(captureSelection: false)
+                }
+            } label: {
+                Image(systemName: viewModel.isListening ? "mic.fill" : "mic")
+                    .font(.system(size: 17))
+                    .foregroundColor(viewModel.isListening ? .red : .secondary)
+            }
+            .buttonStyle(.plain)
+            .help(viewModel.isListening ? "结束并发送" : "语音输入")
+            
             Button { viewModel.send() } label: {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 20))
@@ -237,6 +260,82 @@ struct ChatView: View {
         }
         .padding(12)
         .background(Color.primary.opacity(0.02))
+    }
+    
+    // MARK: - 上下文 / 聆听
+    
+    private var contextBar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if viewModel.isListening {
+                HStack(spacing: 8) {
+                    Image(systemName: "mic.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(.red)
+                    
+                    Text(viewModel.voice.transcript.isEmpty ? "正在聆听…" : viewModel.voice.transcript)
+                        .font(.system(size: 12))
+                        .foregroundColor(viewModel.voice.transcript.isEmpty ? .secondary : .primary)
+                        .lineLimit(2)
+                    
+                    Spacer(minLength: 0)
+                    
+                    Text("松开即发送")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+            
+            if let context = viewModel.context {
+                HStack(spacing: 6) {
+                    if let image = context.image {
+                        contextChip(icon: "photo", text: "图片 \(image.dimensionText) · \(image.sizeText)")
+                    }
+                    if let text = context.text {
+                        contextChip(
+                            icon: "doc.text",
+                            text: "选中文本 \(text.count) 字\(context.truncated ? "（已截断）" : "")"
+                        )
+                    }
+                    
+                    Spacer(minLength: 0)
+                    
+                    Button { viewModel.removeContext() } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("移除上下文")
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(viewModel.isListening ? Color.red.opacity(0.07) : Color.accentColor.opacity(0.06))
+    }
+    
+    private func contextChip(icon: String, text: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon).font(.system(size: 10))
+            Text(text).font(.system(size: 11))
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.primary.opacity(0.08))
+        .cornerRadius(6)
+    }
+    
+    @ViewBuilder
+    private func voiceErrorBanner(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "mic.slash.fill").font(.system(size: 11))
+            Text(text).font(.caption).textSelection(.enabled)
+            Spacer(minLength: 0)
+        }
+        .foregroundColor(.orange)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.orange.opacity(0.08))
     }
     
     private func focusInput() {
@@ -258,6 +357,12 @@ struct MessageRow: View {
         case .user:
             HStack {
                 Spacer(minLength: 40)
+                VStack(alignment: .trailing, spacing: 4) {
+                if message.hasImage {
+                    Label("含图片", systemImage: "photo")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
                 Text(message.content)
                     .font(.system(size: 13))
                     .textSelection(.enabled)
@@ -265,6 +370,7 @@ struct MessageRow: View {
                     .padding(.vertical, 7)
                     .background(Color.accentColor.opacity(0.16))
                     .cornerRadius(10)
+                }
             }
             
         case .assistant:

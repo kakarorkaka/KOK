@@ -37,6 +37,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         HotKeyManager.shared.handlers[.chat] = {
             ChatPanelController.shared.toggleChat()
         }
+        // 按住说话：按下开录，松开发送
+        HotKeyManager.shared.handlers[.voice] = {
+            ChatPanelController.shared.beginVoice()
+        }
+        HotKeyManager.shared.releaseHandlers[.voice] = {
+            ChatPanelController.shared.endVoice()
+        }
         
         // 3. 初始化状态栏
         setupStatusBar()

@@ -60,8 +60,10 @@ class PanelController: NSObject {
     
     // MARK: - 显示 / 隐藏
     
-    /// 显示在鼠标附近，并自动避免超出屏幕
-    func showWindow() {
+    /// 显示在鼠标附近，并自动避免超出屏幕。
+    /// - Parameter activate: 是否把 App 提到前台。语音场景要传 false——
+    ///   一旦抢走焦点，模拟 ⌘C 就抓不到原来那个 App 里选中的内容了。
+    func showWindow(activate: Bool = true) {
         guard let panel = panel, let screen = NSScreen.main else { return }
         onWillShow?()
         
@@ -84,7 +86,9 @@ class PanelController: NSObject {
         
         panel.setFrameOrigin(NSPoint(x: x, y: y))
         panel.makeKeyAndOrderFront(nil)
-        NSApp.activate()
+        if activate {
+            NSApp.activate()
+        }
         
         startMonitors()
     }

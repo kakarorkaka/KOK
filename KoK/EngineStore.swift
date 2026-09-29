@@ -467,6 +467,11 @@ class EngineManager: ObservableObject {
         UserDefaults.standard.set(id.uuidString, forKey: chatEngineKey)
     }
     
+    /// 语音识别语言。设置页用 @AppStorage("voice_locale") 直接读写这个键。
+    var voiceLocale: String {
+        UserDefaults.standard.string(forKey: "voice_locale") ?? VoiceLocale.chinese.rawValue
+    }
+    
     func isTranslationDefault(_ modelId: UUID) -> Bool { selectedEngineId == modelId }
     func isChatDefault(_ modelId: UUID) -> Bool { chatEngineId == modelId }
     

@@ -40,49 +40,39 @@ struct GeneralSettingsTab: View {
     }()
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("快捷键设置")
-                .font(.headline)
-            
-            Divider()
-            
-            HStack {
-                Text("翻译快捷键:")
-                Spacer()
-                ShortcutRecorder(action: .translate)
+        Form {
+            Section {
+                LabeledContent("翻译") {
+                    ShortcutRecorder(action: .translate)
+                }
+                LabeledContent("对话") {
+                    ShortcutRecorder(action: .chat)
+                }
+            } header: {
+                Text("快捷键")
+            } footer: {
+                Text("翻译读取选中文字，对话直接开输入框。没反应时点「测试」检查是否被别的 App 占用。")
             }
             
-            HStack {
-                Text("对话快捷键:")
-                Spacer()
-                ShortcutRecorder(action: .chat)
-            }
-            
-            Text("点击上方按钮，然后按下你想要的快捷键组合。\n翻译会读取当前选中的文本；对话会直接弹出输入框。\n若快捷键没反应，多半是被 iShot 等工具占用，换一个组合后点「测试」验证。")
-                .font(.caption)
-                .foregroundColor(.secondary)
-            
-            Divider()
-            
-            Toggle("开机自动启动", isOn: $launchAtLogin)
-                .onChange(of: launchAtLogin) { _, newValue in
-                    if #available(macOS 13.0, *) {
-                        do {
-                            if newValue {
-                                try SMAppService.mainApp.register()
-                            } else {
-                                try SMAppService.mainApp.unregister()
+            Section {
+                Toggle("开机自动启动", isOn: $launchAtLogin)
+                    .onChange(of: launchAtLogin) { _, newValue in
+                        if #available(macOS 13.0, *) {
+                            do {
+                                if newValue {
+                                    try SMAppService.mainApp.register()
+                                } else {
+                                    try SMAppService.mainApp.unregister()
+                                }
+                            } catch {
+                                print("开机自启动设置失败: \(error)")
+                                launchAtLogin = !newValue
                             }
-                        } catch {
-                            print("开机自启动设置失败: \(error)")
-                            launchAtLogin = !newValue
                         }
                     }
-                }
-            
-            Spacer()
+            }
         }
-        .padding()
+        .formStyle(.grouped)
     }
 }
 
@@ -136,8 +126,9 @@ struct ShortcutRecorder: View {
                     Label("生效", systemImage: "checkmark.circle.fill")
                         .foregroundColor(.green)
                 case .failed:
-                    Label("未收到，可能被其它 App 占用", systemImage: "xmark.circle.fill")
+                    Label("未收到", systemImage: "xmark.circle.fill")
                         .foregroundColor(.red)
+                        .help("这个组合可能被其它 App 占用了，换一个再试")
                 }
             }
             .font(.caption)

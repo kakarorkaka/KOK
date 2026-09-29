@@ -60,7 +60,7 @@ struct EngineSettingsTab: View {
             }
             Button("取消", role: .cancel) {}
         } message: { provider in
-            Text("该服务商下的 \(provider.models.count) 个模型会一并移除。此操作不可撤销。")
+            Text("会连同 \(provider.models.count) 个模型一起移除，且不可撤销。")
         }
     }
     
@@ -111,7 +111,7 @@ struct EngineSettingsTab: View {
                 .foregroundColor(.secondary.opacity(0.6))
             Text("还没有配置服务商")
                 .font(.headline)
-            Text("添加一个服务商，填入 API Key，再勾选要用的模型。\n同一个服务商的多个模型共用一把 Key。")
+            Text("填一把 API Key，勾选要用的模型即可。")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
@@ -218,8 +218,8 @@ private struct ProviderDetailView: View {
                 Text("凭据")
             } footer: {
                 Text(provider.type == .deepL
-                     ? "DeepL 的 Key 形如 xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx。"
-                     : "同一服务商下的所有模型共用这把 Key，不用每个模型填一遍。")
+                     ? "Key 形如 xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx。"
+                     : "所有模型共用这把 Key。")
             }
             
             // ── 备注与链接 ─────────────────────────────────────
@@ -252,14 +252,14 @@ private struct ProviderDetailView: View {
             } header: {
                 Text("备注与链接")
             } footer: {
-                Text("备注会显示在左侧列表上，方便区分多个账号（如「公司账号 · 10 月到期」）；官网地址用于快速去查余额、拿 Key。")
+                Text("备注会显示在左侧列表上。")
             }
             
             // ── 模型 ──────────────────────────────────────────
             if provider.type != .deepL {
                 Section {
                     if provider.models.isEmpty {
-                        Text("还没有模型，点下面的按钮添加。")
+                        Text("还没有模型。")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     } else {
@@ -306,7 +306,7 @@ private struct ProviderDetailView: View {
                 } header: {
                     Text("模型")
                 } footer: {
-                    Text("勾选的模型会出现在「翻译引擎 / 对话引擎」的选择列表里。\n「译」「聊」用来指定该模型作为哪个用途的默认。")
+                    Text("只有勾选的模型会出现在引擎选择里；「译」「聊」设为对应用途的默认。")
                 }
             }
             
@@ -349,7 +349,7 @@ private struct ProviderDetailView: View {
                     set: { value in mutate { $0.isEnabled = value } }
                 ))
             } footer: {
-                Text("关闭后，该服务商下的所有模型都不会出现在引擎列表里。")
+                Text("关闭后，其下所有模型都不可用。")
             }
         }
         .formStyle(.grouped)
@@ -582,7 +582,7 @@ private struct ModelEditorSheet: View {
                     .textFieldStyle(.roundedBorder)
             }
             
-            Text("模型 ID 是服务商文档里给出的名称，会原样发给接口。")
+            Text("会原样发给接口，需与服务商文档一致。")
                 .font(.caption2)
                 .foregroundColor(.secondary)
             
@@ -722,7 +722,7 @@ struct AddProviderSheet: View {
             fetchStatusRow
             
             if models.isEmpty {
-                Text("可以点「获取模型」自动拉取，或直接添加后在详情里手动填写。")
+                Text("点「获取模型」自动拉取，或稍后手动填写。")
                     .font(.caption2)
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -900,7 +900,7 @@ struct FetchModelsSheet: View {
                     Label(message, systemImage: "exclamationmark.triangle.fill")
                         .font(.caption)
                         .foregroundColor(.orange)
-                    Text("可以关掉这个窗口，改用「手动添加」。")
+                    Text("关掉后用「手动添加」。")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
@@ -908,7 +908,7 @@ struct FetchModelsSheet: View {
                 
             case .loaded:
                 if candidates.isEmpty {
-                    Text("该服务商返回的模型都已在列表里了。")
+                    Text("返回的模型都已在列表里。")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .frame(maxWidth: .infinity, minHeight: 140, alignment: .leading)

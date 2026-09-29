@@ -30,10 +30,8 @@ struct PromptSettingsTab: View {
                     manager.globalSystemPrompt = EngineConfig.defaultSystemPrompt
                 }
             } footer: {
-                Text("应用于所有 LLM 翻译引擎（DeepL 除外）。留空则回退到内置默认提示词。\n"
-                     + "可用变量：\(PromptTemplate.Variable.targetLang.display) 目标语言、"
-                     + "\(PromptTemplate.Variable.sourceLang.display) 源语言（大小写与单双括号均可识别）。\n"
-                     + "改动会自动保存。")
+                Text("留空则用内置默认值。可用变量：\(PromptTemplate.Variable.targetLang.display) 目标语言、"
+                     + "\(PromptTemplate.Variable.sourceLang.display) 源语言（大小写与单双括号均可识别）。")
             }
             
             // ── 对话提示词 ─────────────────────────────────────
@@ -51,7 +49,7 @@ struct PromptSettingsTab: View {
                     manager.chatSystemPrompt = EngineConfig.defaultChatSystemPrompt
                 }
             } footer: {
-                Text("仅用于快速问答面板，与翻译提示词互不影响。对话不做变量替换。\n改动会自动保存。")
+                Text("对话不做变量替换。")
             }
         }
         .formStyle(.grouped)

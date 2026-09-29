@@ -170,7 +170,10 @@ private struct ProviderDetailView: View {
     @State private var keyDraft = ""
     @State private var urlDraft = ""
     @State private var promptDraft = ""
+    @State private var noteDraft = ""
+    @State private var websiteDraft = ""
     @State private var showingAddModel = false
+    @State private var showingFetchModels = false
     @State private var editingModel: ProviderModel?
     @State private var testState: TestState = .idle
     
@@ -220,6 +223,39 @@ private struct ProviderDetailView: View {
                      : "同一服务商下的所有模型共用这把 Key，不用每个模型填一遍。")
             }
             
+            // ── 备注与链接 ─────────────────────────────────────
+            Section {
+                LabeledContent("备注") {
+                    // 占位符留空：LabeledContent 里非空 placeholder 会和实际值并排渲染
+                    TextField("", text: $noteDraft)
+                        .onChange(of: noteDraft) { _, value in
+                            guard value != provider.note else { return }
+                            mutate { $0.note = value }
+                        }
+                }
+                
+                LabeledContent("官网 / 控制台") {
+                    HStack(spacing: 8) {
+                        TextField("", text: $websiteDraft)
+                            .textFieldStyle(.roundedBorder)
+                            .layoutPriority(1)
+                            .onChange(of: websiteDraft) { _, value in
+                                guard value != provider.website else { return }
+                                mutate { $0.website = value }
+                            }
+                        
+                        Button("打开") { openWebsite() }
+                            .controlSize(.small)
+                            .fixedSize()
+                            .disabled(websiteURL == nil)
+                    }
+                }
+            } header: {
+                Text("备注与链接")
+            } footer: {
+                Text("备注会显示在左侧列表上，方便区分多个账号（如「公司账号 · 10 月到期」）；官网地址用于快速去查余额、拿 Key。")
+            }
+            
             // ── 模型 ──────────────────────────────────────────
             if provider.type != .deepL {
                 Section {
@@ -247,14 +283,27 @@ private struct ProviderDetailView: View {
                         }
                     }
                     
-                    Button {
-                        showingAddModel = true
-                    } label: {
-                        Label("添加模型", systemImage: "plus")
-                            .font(.system(size: 12))
+                    HStack(spacing: 16) {
+                        Button {
+                            showingFetchModels = true
+                        } label: {
+                            Label("从服务商获取", systemImage: "arrow.down.circle")
+                                .font(.system(size: 12))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(.accentColor)
+                        .disabled(!provider.hasAPIKey)
+                        .help(provider.hasAPIKey ? "调用模型列表接口，自动发现可用模型" : "请先填写 API Key")
+                        
+                        Button {
+                            showingAddModel = true
+                        } label: {
+                            Label("手动添加", systemImage: "plus")
+                                .font(.system(size: 12))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(.accentColor)
                     }
-                    .buttonStyle(.plain)
-                    .foregroundColor(.accentColor)
                 } header: {
                     Text("模型")
                 } footer: {
@@ -329,6 +378,16 @@ private struct ProviderDetailView: View {
                 manager.addModels([model], to: provider.id)
             }
         }
+        .sheet(isPresented: $showingFetchModels) {
+            FetchModelsSheet(provider: provider) { discovered in
+                let existing = Set(provider.models.map(\.modelName))
+                let fresh = discovered.filter { !existing.contains($0.id) }
+                manager.addModels(
+                    fresh.map { ProviderModel(id: UUID(), name: $0.name, modelName: $0.id, isEnabled: true) },
+                    to: provider.id
+                )
+            }
+        }
         .sheet(item: $editingModel) { model in
             ModelEditorSheet(model: model) { updated in
                 manager.updateModel(updated, in: provider.id)
@@ -372,6 +431,25 @@ private struct ProviderDetailView: View {
         keyDraft = provider.apiKey
         urlDraft = provider.apiURL
         promptDraft = provider.systemPrompt
+        noteDraft = provider.note
+        websiteDraft = provider.website
+    }
+    
+    /// 只有填了合法 http(s) 地址才能「打开」
+    private var websiteURL: URL? {
+        let trimmed = provider.website.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let url = URL(string: trimmed),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              url.host != nil
+        else { return nil }
+        return url
+    }
+    
+    private func openWebsite() {
+        guard let url = websiteURL else { return }
+        NSWorkspace.shared.open(url)
     }
     
     /// 校验能不能发起测试：得有 Key，且（非 DeepL 时）至少有一个启用的模型
@@ -398,20 +476,25 @@ private struct ProviderDetailView: View {
         testState = .running
         
         Task {
+            let started = CFAbsoluteTimeGetCurrent()
             do {
+                let summary: String
                 if provider.type == .deepL {
                     let result = try await UnifiedTranslationService()
                         .translate(text: "hello", to: "ZH", using: config)
-                    testState = .ok("翻译正常：\(result.text.prefix(24))")
+                    summary = "翻译正常：\(result.text.prefix(20))"
                 } else {
                     let text = try await ChatService().complete(
                         messages: [ChatMessage(role: .user, content: "Reply with the single word: pong")],
                         using: config
                     )
-                    testState = .ok("连接正常：\(text.prefix(24))")
+                    summary = "连接正常：\(text.prefix(20))"
                 }
+                let ms = Int((CFAbsoluteTimeGetCurrent() - started) * 1000)
+                testState = .ok("\(summary) · \(model?.name ?? "默认模型") · \(ms) ms")
             } catch {
-                testState = .failed(error.localizedDescription)
+                let ms = Int((CFAbsoluteTimeGetCurrent() - started) * 1000)
+                testState = .failed("\(error.localizedDescription)（\(ms) ms）")
             }
         }
     }
@@ -557,28 +640,44 @@ struct AddProviderSheet: View {
     @State private var name = ""
     @State private var apiURL = ""
     @State private var apiKey = ""
+    /// 当前候选模型列表：初始来自预设，可被「获取模型」替换/扩充
+    @State private var models: [ProviderCatalog.ModelTemplate] = []
     @State private var selectedModels: Set<String> = []
+    @State private var fetchState: FetchState = .idle
+    
+    private enum FetchState: Equatable {
+        case idle
+        case running
+        case ok(String)
+        case failed(String)
+    }
     
     private var isCustom: Bool { template.id == ProviderCatalog.custom.id }
+    
+    private var canFetch: Bool {
+        !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !apiURL.isEmpty
+    }
     
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("添加服务商")
                 .font(.headline)
             
-            // 预设选择
+            // 预设选择（按类别分组）
             LabeledContent("服务商") {
                 Picker("", selection: $template) {
-                    ForEach(ProviderCatalog.all) { item in
-                        Label(item.name, systemImage: item.symbol).tag(item)
+                    ForEach(ProviderCatalog.grouped) { group in
+                        Section(group.category.rawValue) {
+                            ForEach(group.templates) { item in
+                                Label(item.name, systemImage: item.symbol).tag(item)
+                            }
+                        }
                     }
                 }
                 .labelsHidden()
             }
             .onChange(of: template) { _, newValue in
-                name = newValue.name == ProviderCatalog.custom.name ? "" : newValue.name
-                apiURL = newValue.apiURL
-                selectedModels = Set(newValue.models.map(\.id))
+                apply(template: newValue)
             }
             
             LabeledContent("名称") {
@@ -589,12 +688,14 @@ struct AddProviderSheet: View {
             LabeledContent("API Key") {
                 SecureField(template.keyPlaceholder, text: $apiKey)
                     .textFieldStyle(.roundedBorder)
+                    .onChange(of: apiKey) { _, _ in fetchState = .idle }
             }
             
             if isCustom {
                 LabeledContent("接口地址") {
                     TextField("https://.../chat/completions", text: $apiURL)
                         .textFieldStyle(.roundedBorder)
+                        .onChange(of: apiURL) { _, _ in fetchState = .idle }
                 }
             } else if let note = template.note {
                 Text(note)
@@ -602,18 +703,20 @@ struct AddProviderSheet: View {
                     .foregroundColor(.secondary)
             }
             
-            if !template.models.isEmpty {
-                Divider()
+            Divider()
+            
+            // 模型：可以先用预设列表，也可以直接从服务商拉取
+            HStack {
+                Text("模型")
+                    .font(.subheadline)
+                Spacer()
                 
-                HStack {
-                    Text("选择要启用的模型")
-                        .font(.subheadline)
-                    Spacer()
-                    Button(selectedModels.count == template.models.count ? "取消全选" : "全选") {
-                        if selectedModels.count == template.models.count {
+                if !models.isEmpty {
+                    Button(selectedModels.count == models.count ? "取消全选" : "全选") {
+                        if selectedModels.count == models.count {
                             selectedModels.removeAll()
                         } else {
-                            selectedModels = Set(template.models.map(\.id))
+                            selectedModels = Set(models.map(\.id))
                         }
                     }
                     .font(.caption)
@@ -621,9 +724,29 @@ struct AddProviderSheet: View {
                     .foregroundColor(.accentColor)
                 }
                 
+                Button {
+                    fetchModels()
+                } label: {
+                    Label("获取模型", systemImage: "arrow.down.circle")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(canFetch ? .accentColor : .secondary)
+                .disabled(!canFetch || fetchState == .running)
+                .help(canFetch ? "调用模型列表接口，自动发现可用模型" : "请先填写 API Key 和接口地址")
+            }
+            
+            fetchStatusRow
+            
+            if models.isEmpty {
+                Text("可以点「获取模型」自动拉取，或直接添加后在详情里手动填写。")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 6) {
-                        ForEach(template.models, id: \.id) { item in
+                        ForEach(models, id: \.id) { item in
                             HStack(spacing: 8) {
                                 Image(systemName: selectedModels.contains(item.id) ? "checkmark.square.fill" : "square")
                                     .foregroundColor(selectedModels.contains(item.id) ? .accentColor : .secondary)
@@ -642,7 +765,7 @@ struct AddProviderSheet: View {
                 }
                 .frame(height: 150)
                 
-                Text("已选 \(selectedModels.count)/\(template.models.count)")
+                Text("已选 \(selectedModels.count)/\(models.count)")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
@@ -656,11 +779,69 @@ struct AddProviderSheet: View {
             }
         }
         .padding(20)
-        .frame(width: 460)
-        .onAppear {
-            name = template.name == ProviderCatalog.custom.name ? "" : template.name
-            apiURL = template.apiURL
-            selectedModels = Set(template.models.map(\.id))
+        .frame(width: 470)
+        .onAppear { apply(template: template) }
+    }
+    
+    @ViewBuilder
+    private var fetchStatusRow: some View {
+        switch fetchState {
+        case .idle:
+            EmptyView()
+        case .running:
+            HStack(spacing: 6) {
+                ProgressView().scaleEffect(0.5)
+                Text("正在获取模型…").font(.caption2).foregroundColor(.secondary)
+            }
+        case .ok(let message):
+            Label(message, systemImage: "checkmark.circle.fill")
+                .font(.caption2)
+                .foregroundColor(.green)
+                .lineLimit(2)
+        case .failed(let message):
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption2)
+                .foregroundColor(.orange)
+                .lineLimit(3)
+        }
+    }
+    
+    private func apply(template newTemplate: ProviderCatalog.Template) {
+        name = newTemplate.category == .custom ? "" : newTemplate.name
+        apiURL = newTemplate.apiURL
+        models = newTemplate.models
+        selectedModels = Set(newTemplate.models.map(\.id))
+        fetchState = .idle
+    }
+    
+    /// 用「临时的 Provider」去调模型列表接口，拉回来的结果合并进候选列表
+    private func fetchModels() {
+        let draft = Provider(
+            id: UUID(),
+            name: name.isEmpty ? template.name : name,
+            type: template.type,
+            apiURL: apiURL,
+            apiKey: apiKey,
+            systemPrompt: "",
+            isEnabled: true,
+            models: []
+        )
+        
+        fetchState = .running
+        
+        Task {
+            do {
+                let discovered = try await ModelDiscovery.fetchModels(for: draft)
+                let existing = Set(models.map(\.id))
+                let fresh = discovered.filter { !existing.contains($0.id) }
+                models = (models + fresh).sorted { $0.id < $1.id }
+                selectedModels.formUnion(fresh.map(\.id))
+                fetchState = .ok(fresh.isEmpty
+                    ? "获取到 \(discovered.count) 个模型，都已在列表中"
+                    : "获取到 \(discovered.count) 个模型，新增 \(fresh.count) 个并已勾选")
+            } catch {
+                fetchState = .failed(error.localizedDescription)
+            }
         }
     }
     
@@ -668,7 +849,7 @@ struct AddProviderSheet: View {
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         if isCustom { return !apiURL.isEmpty }
-        return template.models.isEmpty || !selectedModels.isEmpty
+        return true
     }
     
     private func toggle(_ id: String) {
@@ -680,14 +861,9 @@ struct AddProviderSheet: View {
     }
     
     private func add() {
-        let models: [ProviderModel]
-        if isCustom {
-            models = [ProviderModel(id: UUID(), name: name, modelName: name, isEnabled: true)]
-        } else {
-            models = template.models
-                .filter { selectedModels.contains($0.id) }
-                .map { ProviderModel(id: UUID(), name: $0.name, modelName: $0.id, isEnabled: true) }
-        }
+        let picked = models
+            .filter { selectedModels.contains($0.id) }
+            .map { ProviderModel(id: UUID(), name: $0.name, modelName: $0.id, isEnabled: true) }
         
         onAdd(Provider(
             id: UUID(),
@@ -697,8 +873,137 @@ struct AddProviderSheet: View {
             apiKey: apiKey,
             systemPrompt: "",
             isEnabled: true,
-            models: models
+            models: picked
         ))
         dismiss()
+    }
+}
+
+// MARK: - 获取模型弹窗（已有服务商）
+
+/// 调用服务商的模型列表接口，勾选后追加为模型。
+/// 参考 CC Switch 的「获取模型」，失败时按状态码给可操作的提示。
+struct FetchModelsSheet: View {
+    let provider: Provider
+    let onAdd: ([ProviderCatalog.ModelTemplate]) -> Void
+    
+    @Environment(\.dismiss) private var dismiss
+    
+    @State private var state: LoadState = .loading
+    @State private var candidates: [ProviderCatalog.ModelTemplate] = []
+    @State private var selected: Set<String> = []
+    
+    private enum LoadState: Equatable {
+        case loading
+        case loaded
+        case failed(String)
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("获取模型 · \(provider.name)")
+                .font(.headline)
+            
+            switch state {
+            case .loading:
+                HStack(spacing: 8) {
+                    ProgressView().scaleEffect(0.6)
+                    Text("正在调用模型列表接口…")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, minHeight: 140, alignment: .leading)
+                
+            case .failed(let message):
+                VStack(alignment: .leading, spacing: 8) {
+                    Label(message, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                    Text("可以关掉这个窗口，改用「手动添加」。")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, minHeight: 140, alignment: .leading)
+                
+            case .loaded:
+                if candidates.isEmpty {
+                    Text("该服务商返回的模型都已在列表里了。")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 140, alignment: .leading)
+                } else {
+                    HStack {
+                        Text("发现 \(candidates.count) 个新模型")
+                            .font(.subheadline)
+                        Spacer()
+                        Button(selected.count == candidates.count ? "取消全选" : "全选") {
+                            if selected.count == candidates.count {
+                                selected.removeAll()
+                            } else {
+                                selected = Set(candidates.map(\.id))
+                            }
+                        }
+                        .font(.caption)
+                        .buttonStyle(.plain)
+                        .foregroundColor(.accentColor)
+                    }
+                    
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(candidates, id: \.id) { item in
+                                HStack(spacing: 8) {
+                                    Image(systemName: selected.contains(item.id) ? "checkmark.square.fill" : "square")
+                                        .foregroundColor(selected.contains(item.id) ? .accentColor : .secondary)
+                                    Text(item.name)
+                                        .font(.system(size: 12.5))
+                                    Spacer()
+                                    Text(item.id)
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .foregroundColor(.secondary)
+                                }
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    if selected.contains(item.id) {
+                                        selected.remove(item.id)
+                                    } else {
+                                        selected.insert(item.id)
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                    .frame(height: 220)
+                }
+            }
+            
+            HStack {
+                Spacer()
+                Button("取消") { dismiss() }
+                if case .loaded = state, !candidates.isEmpty {
+                    Button("添加 \(selected.count) 个") {
+                        onAdd(candidates.filter { selected.contains($0.id) })
+                        dismiss()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(selected.isEmpty)
+                }
+            }
+        }
+        .padding(20)
+        .frame(width: 470)
+        .task { await load() }
+    }
+    
+    private func load() async {
+        do {
+            let discovered = try await ModelDiscovery.fetchModels(for: provider)
+            let existing = Set(provider.models.map(\.modelName))
+            candidates = discovered.filter { !existing.contains($0.id) }
+            selected = Set(candidates.map(\.id))
+            state = .loaded
+        } catch {
+            state = .failed(error.localizedDescription)
+        }
     }
 }

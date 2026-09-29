@@ -81,6 +81,10 @@ struct Provider: Codable, Identifiable, Equatable {
     var systemPrompt: String
     var isEnabled: Bool
     var models: [ProviderModel]
+    /// 备注：账号用途、套餐、到期时间等，显示在列表行上
+    var note: String = ""
+    /// 官网 / 控制台地址，点一下直接去查余额、拿 Key
+    var website: String = ""
     
     var hasAPIKey: Bool {
         !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -90,9 +94,30 @@ struct Provider: Codable, Identifiable, Equatable {
         models.filter(\.isEnabled)
     }
     
-    /// 列表副标题：比"OpenAI 兼容"有信息量
+    /// 列表副标题：模型数 + 备注
     var summary: String {
-        enabledModels.isEmpty ? "未启用模型" : "\(enabledModels.count) 个模型"
+        var parts: [String] = [enabledModels.isEmpty ? "未启用模型" : "\(enabledModels.count) 个模型"]
+        let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { parts.append(trimmed) }
+        return parts.joined(separator: " · ")
+    }
+}
+
+extension Provider {
+    /// 2.2 及更早的数据没有 note / website，缺字段时回退到空串而不是解码失败。
+    /// 写在 extension 里是为了保留编译器合成的逐成员初始化器。
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        type = try container.decode(EngineConfig.EngineType.self, forKey: .type)
+        apiURL = try container.decode(String.self, forKey: .apiURL)
+        apiKey = try container.decode(String.self, forKey: .apiKey)
+        systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt) ?? ""
+        isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        models = try container.decodeIfPresent([ProviderModel].self, forKey: .models) ?? []
+        note = try container.decodeIfPresent(String.self, forKey: .note) ?? ""
+        website = try container.decodeIfPresent(String.self, forKey: .website) ?? ""
     }
 }
 
@@ -111,10 +136,23 @@ enum ProviderCatalog {
         let name: String
     }
     
+    /// 预设按类别分组，和 CC Switch / Cherry Studio 的做法一致：
+    /// 列表长了以后，扁平下拉很难扫。
+    enum Category: String, CaseIterable, Identifiable {
+        case domestic = "国内服务商"
+        case international = "国际服务商"
+        case aggregator = "聚合 / 中转"
+        case special = "专用协议"
+        case custom = "自定义"
+        
+        var id: String { rawValue }
+    }
+    
     struct Template: Identifiable, Hashable {
         var id: String { name }
         let name: String
         let symbol: String
+        let category: Category
         let type: EngineConfig.EngineType
         let apiURL: String
         let keyPlaceholder: String
@@ -125,17 +163,20 @@ enum ProviderCatalog {
     static let custom = Template(
         name: "自定义",
         symbol: "slider.horizontal.3",
+        category: .custom,
         type: .openAICompatible,
         apiURL: "",
         keyPlaceholder: "填入你的 API Key",
         models: [],
-        note: "自行填写接口地址与模型 ID，适用于任何 OpenAI 兼容服务"
+        note: "自行填写接口地址，然后用「获取模型」拉取可用模型"
     )
     
     static let all: [Template] = [
+        // ── 国内服务商 ──────────────────────────────────────────
         Template(
             name: "腾讯云 Token Plan",
             symbol: "cloud",
+            category: .domestic,
             type: .openAICompatible,
             apiURL: "https://api.lkeap.cloud.tencent.com/plan/v3/chat/completions",
             keyPlaceholder: "填入腾讯云 API Key",
@@ -156,22 +197,9 @@ enum ProviderCatalog {
             note: nil
         ),
         Template(
-            name: "OpenAI",
-            symbol: "circle.hexagongrid",
-            type: .openAICompatible,
-            apiURL: "https://api.openai.com/v1/chat/completions",
-            keyPlaceholder: "sk-...",
-            models: [
-                ModelTemplate(id: "gpt-4o", name: "GPT-4o"),
-                ModelTemplate(id: "gpt-4o-mini", name: "GPT-4o mini"),
-                ModelTemplate(id: "gpt-4-turbo", name: "GPT-4 Turbo"),
-                ModelTemplate(id: "gpt-3.5-turbo", name: "GPT-3.5 Turbo"),
-            ],
-            note: nil
-        ),
-        Template(
             name: "DeepSeek",
             symbol: "brain",
+            category: .domestic,
             type: .openAICompatible,
             apiURL: "https://api.deepseek.com/chat/completions",
             keyPlaceholder: "sk-...",
@@ -184,6 +212,7 @@ enum ProviderCatalog {
         Template(
             name: "智谱 AI",
             symbol: "sparkles",
+            category: .domestic,
             type: .openAICompatible,
             apiURL: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
             keyPlaceholder: "填入智谱 API Key",
@@ -195,8 +224,9 @@ enum ProviderCatalog {
             note: nil
         ),
         Template(
-            name: "Moonshot",
+            name: "Kimi（Moonshot）",
             symbol: "moon.stars",
+            category: .domestic,
             type: .openAICompatible,
             apiURL: "https://api.moonshot.cn/v1/chat/completions",
             keyPlaceholder: "sk-...",
@@ -208,8 +238,9 @@ enum ProviderCatalog {
             note: nil
         ),
         Template(
-            name: "通义千问",
+            name: "通义千问（阿里云百炼）",
             symbol: "aqi.medium",
+            category: .domestic,
             type: .openAICompatible,
             apiURL: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
             keyPlaceholder: "sk-...",
@@ -221,8 +252,46 @@ enum ProviderCatalog {
             note: nil
         ),
         Template(
+            name: "火山方舟（豆包）",
+            symbol: "flame",
+            category: .domestic,
+            type: .openAICompatible,
+            apiURL: "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+            keyPlaceholder: "填入火山方舟 API Key",
+            models: [],
+            note: "模型要先在火山方舟控制台创建接入点，再用「获取模型」拉取"
+        ),
+        Template(
+            name: "魔搭 ModelScope",
+            symbol: "square.stack.3d.up",
+            category: .domestic,
+            type: .openAICompatible,
+            apiURL: "https://api-inference.modelscope.cn/v1/chat/completions",
+            keyPlaceholder: "填入 ModelScope SDK Token",
+            models: [],
+            note: "点「获取模型」拉取可用模型"
+        ),
+        
+        // ── 国际服务商 ──────────────────────────────────────────
+        Template(
+            name: "OpenAI",
+            symbol: "circle.hexagongrid",
+            category: .international,
+            type: .openAICompatible,
+            apiURL: "https://api.openai.com/v1/chat/completions",
+            keyPlaceholder: "sk-...",
+            models: [
+                ModelTemplate(id: "gpt-4o", name: "GPT-4o"),
+                ModelTemplate(id: "gpt-4o-mini", name: "GPT-4o mini"),
+                ModelTemplate(id: "gpt-4-turbo", name: "GPT-4 Turbo"),
+                ModelTemplate(id: "gpt-3.5-turbo", name: "GPT-3.5 Turbo"),
+            ],
+            note: nil
+        ),
+        Template(
             name: "Google Gemini",
             symbol: "diamond",
+            category: .international,
             type: .gemini,
             apiURL: "https://generativelanguage.googleapis.com/v1beta/models/{{MODEL}}:generateContent",
             keyPlaceholder: "AIza...",
@@ -233,17 +302,57 @@ enum ProviderCatalog {
             ],
             note: "模型 ID 会自动填进地址里的 {{MODEL}}"
         ),
+        
+        // ── 聚合 / 中转 ─────────────────────────────────────────
+        Template(
+            name: "硅基流动 SiliconFlow",
+            symbol: "arrow.triangle.branch",
+            category: .aggregator,
+            type: .openAICompatible,
+            apiURL: "https://api.siliconflow.cn/v1/chat/completions",
+            keyPlaceholder: "sk-...",
+            models: [],
+            note: "聚合了多家开源模型，点「获取模型」查看完整列表"
+        ),
+        Template(
+            name: "OpenRouter",
+            symbol: "network",
+            category: .aggregator,
+            type: .openAICompatible,
+            apiURL: "https://openrouter.ai/api/v1/chat/completions",
+            keyPlaceholder: "sk-or-...",
+            models: [],
+            note: "聚合数百个模型，点「获取模型」查看完整列表"
+        ),
+        
+        // ── 专用协议 ────────────────────────────────────────────
         Template(
             name: "DeepL",
             symbol: "character.book.closed",
+            category: .special,
             type: .deepL,
             apiURL: "https://api-free.deepl.com/v2/translate",
             keyPlaceholder: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx",
             models: [],
             note: "DeepL 仅用于翻译，不支持对话"
         ),
+        
         custom,
     ]
+    
+    /// 按类别分组，供 Picker 使用
+    struct TemplateGroup: Identifiable {
+        var id: String { category.rawValue }
+        let category: Category
+        let templates: [Template]
+    }
+    
+    static var grouped: [TemplateGroup] {
+        Category.allCases.compactMap { category in
+            let items = all.filter { $0.category == category }
+            return items.isEmpty ? nil : TemplateGroup(category: category, templates: items)
+        }
+    }
     
     /// 迁移旧数据时，从接口地址反推一个像样的服务商名
     static func suggestedName(forAPIURL url: String) -> String {

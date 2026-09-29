@@ -22,7 +22,7 @@ final class ChatViewModel: ObservableObject {
     
     let engineManager = EngineManager.shared
     
-    private let service = ChatService()
+    private let service = LLMClient()
     private var streamTask: Task<Void, Never>?
     
     /// 送入模型的最大历史条数（约 10 轮）

@@ -1,15 +1,18 @@
 //
-//  ChatService.swift
+//  LLMClient.swift
 //  KoK
 //
-//  多轮对话请求。支持 OpenAI 兼容协议与 Gemini 的 SSE 流式返回；
-//  若服务端不支持流式，会自动降级为一次性返回。
+//  大模型请求客户端，翻译与对话共用：
+//  - 翻译 = [system: 提示词, user: 原文]
+//  - 对话 = 多轮消息
+//  支持 OpenAI 兼容协议与 Gemini 的 SSE 流式返回；服务端不支持流式时自动降级为一次性返回。
 //
 
 import Foundation
 
-// MARK: - 对话消息
+// MARK: - 消息
 
+/// 一条消息。翻译也复用它：system 放提示词，user 放原文。
 struct ChatMessage: Identifiable, Equatable {
     enum Role: String, Codable {
         case system
@@ -28,11 +31,11 @@ struct ChatMessage: Identifiable, Equatable {
     }
 }
 
-// MARK: - 对话服务
+// MARK: - 客户端
 
-class ChatService {
+class LLMClient {
     
-    /// 流式对话：逐段产出模型回复。
+    /// 流式请求：逐段产出模型回复。翻译与对话共用。
     ///
     /// 若首个请求就失败（例如服务端不支持 `stream`），且尚未产出任何内容，
     /// 会自动降级为一次性的非流式请求。
@@ -70,7 +73,7 @@ class ChatService {
         }
     }
     
-    /// 非流式对话（降级路径）
+    /// 非流式请求（降级路径，也用于连通性测试）
     func complete(messages: [ChatMessage], using config: EngineConfig) async throws -> String {
         let apiKey = config.resolvedAPIKey
         guard !apiKey.isEmpty else { throw ServiceError.missingAPIKey(config.name) }

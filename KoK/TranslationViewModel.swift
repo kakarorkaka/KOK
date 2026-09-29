@@ -76,17 +76,37 @@ class TranslationViewModel: ObservableObject {
         
         outputTask?.cancel()
         
-        Task {
+        let targetLang = isContainsChinese(text) ? "EN-US" : "ZH"
+        outputTask = Task { [weak self] in
+            guard let self else { return }
+            var received = false
+            
             do {
-                let targetLang = isContainsChinese(text) ? "EN-US" : "ZH"
-                let result = try await service.translate(text: text, to: targetLang, using: config)
+                // 流式：首字到达就显示，不再等整段生成完
+                for try await chunk in self.service.translateStream(text: text, to: targetLang, using: config) {
+                    if Task.isCancelled { return }
+                    received = true
+                    self.translatedText += chunk
+                }
                 
                 self.isLoading = false
-                startTypewriterEffect(fullText: result.text, engineName: config.name)
+                if Task.isCancelled { return }
                 
+                guard received else {
+                    self.errorMessage = ServiceError.emptyResponse(config.name).localizedDescription
+                    return
+                }
+                
+                self.addToHistory(
+                    source: text,
+                    translated: self.translatedText.trimmingCharacters(in: .whitespacesAndNewlines),
+                    engine: config.name
+                )
             } catch {
                 self.isLoading = false
-                self.errorMessage = "翻译失败: \(error.localizedDescription)"
+                if !Task.isCancelled {
+                    self.errorMessage = "翻译失败: \(error.localizedDescription)"
+                }
             }
         }
     }
@@ -155,25 +175,5 @@ class TranslationViewModel: ObservableObject {
     
     private func isContainsChinese(_ text: String) -> Bool {
         return text.range(of: "\\p{Han}", options: .regularExpression) != nil
-    }
-    
-    private func startTypewriterEffect(fullText: String, engineName: String) {
-        outputTask = Task {
-            let cleanText = fullText.trimmingCharacters(in: .whitespacesAndNewlines)
-            
-            for char in cleanText {
-                if Task.isCancelled { return }
-                
-                self.translatedText.append(char)
-                
-                let delay = cleanText.count > 100 ? 0.005 : 0.02
-                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-            }
-            
-            // 打字完成后记录到历史
-            if !Task.isCancelled {
-                self.addToHistory(source: self.sourceText, translated: cleanText, engine: engineName)
-            }
-        }
     }
 }

@@ -7,7 +7,7 @@
 //  结构：服务商（Provider）→ 模型（Model）两层。
 //  API Key / API 地址属于服务商，只填一次；模型只是服务商下的一个条目。
 //  运行时再由 `EngineManager.engines` 展平成扁平的 `EngineConfig` 交给协议层，
-//  因此 `UnifiedTranslationService` 与 `ChatService` 不需要知道服务商的存在。
+//  因此 `UnifiedTranslationService` 与 `LLMClient` 不需要知道服务商的存在。
 //
 
 import Foundation

@@ -467,7 +467,7 @@ private struct ProviderDetailView: View {
                         .translate(text: "hello", to: "ZH", using: config)
                     summary = "翻译正常：\(result.text.prefix(20))"
                 } else {
-                    let text = try await ChatService().complete(
+                    let text = try await LLMClient().complete(
                         messages: [ChatMessage(role: .user, content: "Reply with the single word: pong")],
                         using: config
                     )

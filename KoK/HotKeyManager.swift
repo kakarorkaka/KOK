@@ -26,15 +26,15 @@ enum HotKeyAction: String, CaseIterable, Identifiable {
         }
     }
     
-    /// 未设置过时的默认快捷键
+    /// 未设置过时的默认快捷键。
     ///
-    /// 注意：不要用 ⌥A。macOS 上 `RegisterEventHotKey` 遇到冲突**不会报错**，
-    /// 事件会被先注册方（如 iShot 等截图工具）吃掉，表现为快捷键完全没反应。
-    /// ⌥A 是 iShot 的快速截图默认键，⌥B/D/E/F/G/H/O/P/Q/R/S/T/W/X/Z 也已被其占用。
+    /// 选键原则：避开 iShot 等工具常占用的 ⌥ 组合（iShot 默认就占了
+    /// ⌥A/B/D/E/F/G/H/O/P/Q/R/S/T/W/X/Z）。注意 macOS 上 `RegisterEventHotKey`
+    /// 遇到冲突**不会报错**，事件会被先注册方静默吃掉，表现为「按了完全没反应」。
     var defaultShortcut: (key: Key, modifiers: NSEvent.ModifierFlags) {
         switch self {
         case .translate: return (.d, [.option])
-        case .chat: return (.k, [.option])
+        case .chat: return (.one, [.command])
         }
     }
 }
@@ -76,6 +76,28 @@ class HotKeyManager: ObservableObject {
     
     private init() {
         HotKeyAction.allCases.forEach { loadShortcut(for: $0) }
+        // 完成迁移后再落版本号，保证迁移只发生一次
+        UserDefaults.standard.set(Self.defaultsVersion, forKey: Self.defaultsVersionKey)
+    }
+    
+    // MARK: - 默认值迁移
+    
+    /// 内置默认值版本。每次更换默认键就 +1。
+    private static let defaultsVersionKey = "shortcut_defaults_version"
+    private static let defaultsVersion = 1
+    
+    /// 历史上作为默认值发布过、现已废弃的组合。
+    /// 用户保存的值命中这里，说明他从没手动改过，就跟着新默认一起升级。
+    private static let deprecatedDefaults: [HotKeyAction: [(Key, NSEvent.ModifierFlags)]] = [
+        .chat: [(.a, [.option]), (.k, [.option])]
+    ]
+    
+    private static func isDeprecatedDefault(_ action: HotKeyAction, key: Key, modifierRaw: Int) -> Bool {
+        guard let candidates = deprecatedDefaults[action] else { return false }
+        return candidates.contains { candidate in
+            candidate.0.carbonKeyCode == key.carbonKeyCode
+                && Int(candidate.1.rawValue) == modifierRaw
+        }
     }
     
     // MARK: - 注册
@@ -138,10 +160,12 @@ class HotKeyManager: ObservableObject {
             modifierRaw = UserDefaults.standard.integer(forKey: "shortcut_modifiers")
         }
         
-        // 迁移 2.0 早期版本的对话默认值：⌥A 被截图工具抢占，统一换成新的默认值
-        if action == .chat,
-           keyCode == Int(Key.a.carbonKeyCode),
-           modifierRaw == Int(NSEvent.ModifierFlags.option.rawValue) {
+        // 内置默认值变更：仅当保存的组合恰好是「历史默认值」时才跟随升级，
+        // 用户自己改过的组合不动。
+        let storedVersion = UserDefaults.standard.integer(forKey: Self.defaultsVersionKey)
+        if storedVersion < Self.defaultsVersion,
+           let key = Key(carbonKeyCode: UInt32(keyCode)),
+           Self.isDeprecatedDefault(action, key: key, modifierRaw: modifierRaw) {
             let fallback = action.defaultShortcut
             register(action, key: fallback.key, modifiers: fallback.modifiers)
             return

@@ -99,7 +99,7 @@ struct PromptSettingsTab: View {
                 Text("翻译系统提示词")
                     .font(.headline)
                 
-                Text("此提示词将应用于所有 LLM 翻译引擎（DeepL 除外）。\n留空则使用各引擎自己的提示词。")
+                Text("此提示词将应用于所有 LLM 翻译引擎（DeepL 除外）。\n留空则回退到内置默认提示词。")
                     .font(.caption)
                     .foregroundColor(.secondary)
                 

@@ -169,7 +169,6 @@ private struct ProviderDetailView: View {
     @State private var nameDraft = ""
     @State private var keyDraft = ""
     @State private var urlDraft = ""
-    @State private var promptDraft = ""
     @State private var noteDraft = ""
     @State private var websiteDraft = ""
     @State private var showingAddModel = false
@@ -314,6 +313,15 @@ private struct ProviderDetailView: View {
             // ── 高级 ──────────────────────────────────────────
             Section {
                 DisclosureGroup("高级") {
+                    LabeledContent("接口地址") {
+                        TextField("", text: $urlDraft)
+                            .onChange(of: urlDraft) { _, value in
+                                guard value != provider.apiURL else { return }
+                                mutate { $0.apiURL = value }
+                                testState = .idle
+                            }
+                    }
+                    
                     LabeledContent("协议") {
                         Picker("", selection: Binding(
                             get: { provider.type },
@@ -326,32 +334,9 @@ private struct ProviderDetailView: View {
                         .labelsHidden()
                     }
                     
-                    LabeledContent("接口地址") {
-                        TextField("", text: $urlDraft)
-                            .onChange(of: urlDraft) { _, value in
-                                guard value != provider.apiURL else { return }
-                                mutate { $0.apiURL = value }
-                                testState = .idle
-                            }
-                    }
-                    
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("专属提示词（留空则用全局提示词）")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        TextEditor(text: $promptDraft)
-                            .font(.system(size: 11, design: .monospaced))
-                            .frame(height: 64)
-                            .border(Color.secondary.opacity(0.25))
-                            .onChange(of: promptDraft) { _, value in
-                                guard value != provider.systemPrompt else { return }
-                                mutate { $0.systemPrompt = value }
-                            }
-                    }
-                    
-                    LabeledContent("Gemini 地址占位符") {
-                        Text("{{MODEL}}")
-                            .font(.system(size: 11, design: .monospaced))
+                    if provider.type == .gemini {
+                        Text("地址里的 {{MODEL}} 会被替换成所选模型 ID。")
+                            .font(.caption2)
                             .foregroundColor(.secondary)
                     }
                 }
@@ -430,7 +415,6 @@ private struct ProviderDetailView: View {
         nameDraft = provider.name
         keyDraft = provider.apiKey
         urlDraft = provider.apiURL
-        promptDraft = provider.systemPrompt
         noteDraft = provider.note
         websiteDraft = provider.website
     }
@@ -469,7 +453,6 @@ private struct ProviderDetailView: View {
             apiURL: provider.apiURL,
             apiKey: provider.apiKey,
             modelName: model?.modelName ?? "",
-            systemPrompt: provider.systemPrompt,
             isEnabled: true
         )
         
@@ -822,7 +805,6 @@ struct AddProviderSheet: View {
             type: template.type,
             apiURL: apiURL,
             apiKey: apiKey,
-            systemPrompt: "",
             isEnabled: true,
             models: []
         )
@@ -871,7 +853,6 @@ struct AddProviderSheet: View {
             type: template.type,
             apiURL: apiURL,
             apiKey: apiKey,
-            systemPrompt: "",
             isEnabled: true,
             models: picked
         ))

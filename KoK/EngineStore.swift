@@ -15,6 +15,7 @@ import Combine
 
 // MARK: - 运行时引擎（协议层使用的扁平结构）
 
+/// 运行时引擎：由 `EngineManager.engines` 从服务商 + 模型展平而来，不直接持久化。
 struct EngineConfig: Codable, Identifiable, Equatable {
     var id: UUID
     var name: String           // 显示名称，如 "混元 T1"
@@ -22,7 +23,6 @@ struct EngineConfig: Codable, Identifiable, Equatable {
     var apiURL: String
     var apiKey: String
     var modelName: String
-    var systemPrompt: String
     var isEnabled: Bool
     
     enum EngineType: String, Codable, CaseIterable {
@@ -77,8 +77,6 @@ struct Provider: Codable, Identifiable, Equatable {
     var apiURL: String
     /// 服务商级凭据：同一下所有模型共用，只填一次
     var apiKey: String
-    /// 该服务商专属提示词，留空则跟随全局
-    var systemPrompt: String
     var isEnabled: Bool
     var models: [ProviderModel]
     /// 备注：账号用途、套餐、到期时间等，显示在列表行上
@@ -113,7 +111,6 @@ extension Provider {
         type = try container.decode(EngineConfig.EngineType.self, forKey: .type)
         apiURL = try container.decode(String.self, forKey: .apiURL)
         apiKey = try container.decode(String.self, forKey: .apiKey)
-        systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt) ?? ""
         isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
         models = try container.decodeIfPresent([ProviderModel].self, forKey: .models) ?? []
         note = try container.decodeIfPresent(String.self, forKey: .note) ?? ""
@@ -454,7 +451,6 @@ class EngineManager: ObservableObject {
             apiURL: provider.apiURL,
             apiKey: provider.apiKey,
             modelName: model.modelName,
-            systemPrompt: provider.systemPrompt,
             isEnabled: true
         )
     }
@@ -616,7 +612,6 @@ class EngineManager: ObservableObject {
                 type: first.type,
                 apiURL: first.apiURL,
                 apiKey: first.apiKey,
-                systemPrompt: group.first { !$0.systemPrompt.isEmpty }?.systemPrompt ?? "",
                 isEnabled: group.contains { $0.isEnabled },
                 models: models
             )

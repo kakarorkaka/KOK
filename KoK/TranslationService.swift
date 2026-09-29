@@ -76,7 +76,7 @@ class UnifiedTranslationService {
         request.setValue("Bearer \(config.resolvedAPIKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        let prompt = resolvePrompt(config: config, targetLang: targetLang)
+        let prompt = resolvePrompt(targetLang: targetLang)
         
         let body: [String: Any] = [
             "model": config.modelName,
@@ -129,7 +129,7 @@ class UnifiedTranslationService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        let prompt = resolvePrompt(config: config, targetLang: targetLang)
+        let prompt = resolvePrompt(targetLang: targetLang)
         let fullPrompt = "\(prompt)\n\n\(text)"
         
         let body: [String: Any] = [
@@ -160,10 +160,13 @@ class UnifiedTranslationService {
     
     // MARK: - 提示词解析
     
-    private func resolvePrompt(config: EngineConfig, targetLang: String) -> String {
-        // 优先使用全局自定义提示词，否则用引擎自己的
+    private func resolvePrompt(targetLang: String) -> String {
+        // 只认全局提示词；留空时回退到内置默认值，
+        // 否则会把空的 system message 发给模型
         let manager = EngineManager.shared
-        let template = manager.globalSystemPrompt.isEmpty ? config.systemPrompt : manager.globalSystemPrompt
+        let template = manager.globalSystemPrompt.isEmpty
+            ? EngineConfig.defaultSystemPrompt
+            : manager.globalSystemPrompt
         
         let langName = (targetLang == "ZH") ? "Simplified Chinese" : "English"
         return template.replacingOccurrences(of: "{{TARGET_LANG}}", with: langName)

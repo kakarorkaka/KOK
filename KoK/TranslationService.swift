@@ -168,8 +168,7 @@ class UnifiedTranslationService {
             ? EngineConfig.defaultSystemPrompt
             : manager.globalSystemPrompt
         
-        let langName = (targetLang == "ZH") ? "Simplified Chinese" : "English"
-        return template.replacingOccurrences(of: "{{TARGET_LANG}}", with: langName)
+        return PromptTemplate.fill(template, targetLang: targetLang)
     }
     
 }

@@ -135,9 +135,10 @@ open /Applications/KoK.app
 | `MARKETING_VERSION` | 用户可见版本（`CFBundleShortVersionString`） | 功能更新 `+0.1`；重大重构 / 不兼容变更 `+1.0` |
 | `CURRENT_PROJECT_VERSION` | 构建号（`CFBundleVersion`） | **每次 Archive 或分发都 `+1`**，只增不减 |
 
-当前为 `2.4 (8)`：`1.0` 为 2025-12 的最初版本，`2.0` 为 2026-04 的多引擎重构，
+当前为 `2.5 (9)`：`1.0` 为 2025-12 的最初版本，`2.0` 为 2026-04 的多引擎重构，
 `2.1` 为 2026-09 的快速问答面板，`2.2` 把引擎配置改成「服务商 → 模型」两层结构，
-`2.3` 补齐模型自动发现与账号备注，`2.4` 移除了从不生效的服务商级提示词。
+`2.3` 补齐模型自动发现与账号备注，`2.4` 移除了从不生效的服务商级提示词，
+`2.5` 修好提示词变量替换。
 
 > 内置默认快捷键也带版本号（`shortcut_defaults_version`）：更换默认键时，只有保存值
 > 恰好等于「历史默认值」的配置才会自动升级，用户手动改过的组合不受影响。
@@ -150,6 +151,7 @@ KoK/                     # 源码（Xcode 同步文件夹）
 ├── KoKApp.swift         # App 入口 + AppDelegate（状态栏、面板预热、开机自启动）
 ├── EngineStore.swift    # 引擎数据层：EngineConfig / Provider / ProviderModel + 预设目录
 ├── ModelDiscovery.swift # 调 /models 自动发现可用模型（含按状态码分类的错误提示）
+├── PromptTemplate.swift # 提示词变量替换（大小写 / 单双括号容错 + 未知占位符检测）
 ├── HotKeyManager.swift  # 多动作全局快捷键（含自检钩子与旧配置迁移）
 ├── PanelController.swift# 悬浮面板基类：定位、点击外部 / Esc 关闭
 ├── FloatingPanel.swift  # 无边框可缩放 NSPanel
@@ -159,8 +161,9 @@ KoK/                     # 源码（Xcode 同步文件夹）
 ├── ChatService.swift    # 对话协议实现（OpenAI 兼容 / Gemini，SSE 流式 + 降级）
 ├── TranslationViewModel.swift   # 翻译状态与历史记录
 ├── ChatViewModel.swift  # 对话状态（内存态，不落盘）
-├── SettingsView.swift   # 设置容器 + 通用 / 提示词 / 快捷键录制
+├── SettingsView.swift   # 设置容器 + 通用 / 快捷键录制
 ├── EngineSettingsView.swift     # 设置 ▸ 引擎：服务商列表 + 详情 + 添加服务商
+├── PromptSettingsView.swift     # 设置 ▸ 提示词：翻译 / 对话两套系统提示词
 ├── TranslationView.swift# 翻译面板界面
 ├── ChatView.swift       # 对话面板界面 + 轻量 Markdown / 代码块
 └── Assets.xcassets/     # 图标与配色
@@ -223,6 +226,24 @@ KoK/                     # 源码（Xcode 同步文件夹）
 - `ProviderModel.id` 沿用旧的 `EngineConfig.id`，所以**已保存的翻译 / 对话选中项不会丢**；
 - 原始 JSON 会备份到 `engine_configs_backup_v1`，需要回滚时把它的内容写回
   `engine_configs`、并删掉 `provider_store_v2` 即可。
+
+## 提示词变量（仅翻译）
+
+「设置 ▸ 提示词」里的翻译提示词支持两个变量，翻译前会替换成实际语言名：
+
+| 变量 | 中文原文时 | 英文原文时 |
+|---|---|---|
+| `{{TARGET_LANG}}` | `English` | `Simplified Chinese` |
+| `{{SOURCE_LANG}}` | `Simplified Chinese` | `English` |
+
+翻译方向沿用 App 自身的判断：原文含中文则译成英文，否则译成中文。
+
+**写法容错**：`{{TARGET_LANG}}`、`{TARGET_LANG}`、`{{target_lang}}`、`{target_lang}`
+四种都识别。这是刻意的——用户很自然会写单括号小写，若只认一种，变量会静默失效、
+把 `{target_lang}` 原样发给模型。
+
+**未知占位符会提示**：提示词里出现 KoK 不认识的 `{{FOO}}` 时，编辑框下方会直接标出来，
+而不是让它悄悄失效。对话提示词不做变量替换，写了同样会提示。
 
 ## 性能实测
 

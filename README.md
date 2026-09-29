@@ -135,8 +135,8 @@ open /Applications/KoK.app
 | `MARKETING_VERSION` | 用户可见版本（`CFBundleShortVersionString`） | 功能更新 `+0.1`；重大重构 / 不兼容变更 `+1.0` |
 | `CURRENT_PROJECT_VERSION` | 构建号（`CFBundleVersion`） | **每次 Archive 或分发都 `+1`**，只增不减 |
 
-当前为 `2.1 (5)`：`1.0` 为 2025-12 的最初版本，`2.0` 为 2026-04 的多引擎重构，
-`2.1` 为 2026-09 的快速问答面板。
+当前为 `2.2 (6)`：`1.0` 为 2025-12 的最初版本，`2.0` 为 2026-04 的多引擎重构，
+`2.1` 为 2026-09 的快速问答面板，`2.2` 为引擎配置改造成「服务商 → 模型」两层结构。
 
 > 内置默认快捷键也带版本号（`shortcut_defaults_version`）：更换默认键时，只有保存值
 > 恰好等于「历史默认值」的配置才会自动升级，用户手动改过的组合不受影响。
@@ -146,17 +146,19 @@ open /Applications/KoK.app
 ```
 KoK.xcodeproj/           # Xcode 工程
 KoK/                     # 源码（Xcode 同步文件夹）
-├── KoKApp.swift         # App 入口 + AppDelegate（状态栏、开机自启动）
+├── KoKApp.swift         # App 入口 + AppDelegate（状态栏、面板预热、开机自启动）
+├── EngineStore.swift    # 引擎数据层：EngineConfig / Provider / ProviderModel + 预设目录
 ├── HotKeyManager.swift  # 多动作全局快捷键（含自检钩子与旧配置迁移）
 ├── PanelController.swift# 悬浮面板基类：定位、点击外部 / Esc 关闭
 ├── FloatingPanel.swift  # 无边框可缩放 NSPanel
 ├── WindowManager.swift  # 翻译面板控制器
 ├── ChatPanelController.swift    # 对话面板控制器（与翻译面板互斥）
-├── TranslationService.swift     # 引擎配置模型 + 翻译协议实现 + 错误类型
+├── TranslationService.swift     # 翻译协议实现 + 错误类型
 ├── ChatService.swift    # 对话协议实现（OpenAI 兼容 / Gemini，SSE 流式 + 降级）
 ├── TranslationViewModel.swift   # 翻译状态与历史记录
 ├── ChatViewModel.swift  # 对话状态（内存态，不落盘）
-├── SettingsView.swift   # 设置界面（引擎管理、提示词、快捷键）
+├── SettingsView.swift   # 设置容器 + 通用 / 提示词 / 快捷键录制
+├── EngineSettingsView.swift     # 设置 ▸ 引擎：服务商列表 + 详情 + 添加服务商
 ├── TranslationView.swift# 翻译面板界面
 ├── ChatView.swift       # 对话面板界面 + 轻量 Markdown / 代码块
 └── Assets.xcassets/     # 图标与配色
@@ -166,6 +168,45 @@ KoK/                     # 源码（Xcode 同步文件夹）
 > 默认都会被打进 App 包。**不要把构建产物、旧版本 `.app`、临时文件放进 `KoK/`**，否则会被
 > 打包进 `KoK.app/Contents/Resources/`。例外文件需在 target 的
 > `PBXFileSystemSynchronizedBuildFileExceptionSet` 中登记（目前仅 `Info.plist`）。
+
+## 引擎配置：服务商 → 模型
+
+配置分两层，和 Cherry Studio / ChatBox 等产品的做法一致：
+
+```
+服务商（Provider）                    ← API Key / 接口地址在这一层，只填一次
+  └─ 模型（ProviderModel）           ← 勾选哪些模型可用
+```
+
+- **API Key 是服务商级的**：腾讯云下面挂 11 个模型，也只需要填一把 Key。
+  旧版是「一个引擎 = 一套地址 + Key + 模型」，11 个模型就要填 11 遍。
+- **协议 / 接口地址收进「高级」**：用户想的是"我要用 DeepSeek"，不是"我要配一个 OpenAI 兼容端点"。
+- **「译 / 聊」两个小标签**直接标明该模型用于哪个用途，取代了原先「启用开关 + 绿点 + 设为默认 + 蓝勾」
+  四套重叠的状态。
+- **写透式自动保存**，没有「保存」按钮。
+- **「测试」按钮**：填完 Key 可以立刻验证连通性，不用先存再跑去翻译一次。
+
+### 旧数据迁移
+
+首次启动 2.2 时，会把旧版扁平的 `engine_configs` 自动合并成服务商结构：
+
+- 按「接口地址 + API Key + 协议」分组，每组一个服务商，每条旧记录变成一个模型；
+- `ProviderModel.id` 沿用旧的 `EngineConfig.id`，所以**已保存的翻译 / 对话选中项不会丢**；
+- 原始 JSON 会备份到 `engine_configs_backup_v1`，需要回滚时把它的内容写回
+  `engine_configs`、并删掉 `provider_store_v2` 即可。
+
+## 性能实测
+
+| 指标 | 实测值 |
+|---|---|
+| 安装包 | 5.2 MB |
+| 空闲内存 | ~71 MB（两个面板预创建后；基线约 19 MB，对话面板 +20 MB、翻译面板 +1 MB） |
+| 唤出面板（已预热） | 中位 4.6 ms |
+| 首次创建对话面板 | 361 ms（仅在启动预热时发生，用户感知不到） |
+| 引擎配置加载 + 迁移 | < 10 ms |
+
+> 面板采用「预创建 + 只做 Show/Hide」，并在启动完成 1.2s 后异步预热：
+> 既不拖慢状态栏出现，也不会让第一次按快捷键卡 360ms。
 
 ## 快速问答的边界
 

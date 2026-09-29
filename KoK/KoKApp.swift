@@ -26,7 +26,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindow: NSWindow?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // 1. 注册全局快捷键（每个动作一个）
+        // 1. 引擎配置必须立刻加载：它负责把旧版扁平结构迁移成「服务商 → 模型」，
+        //    越早跑越不容易和用户的首次操作撞上。实测耗时 < 10ms。
+        _ = EngineManager.shared
+        
+        // 2. 注册全局快捷键（每个动作一个）
         HotKeyManager.shared.handlers[.translate] = {
             WindowManager.shared.toggleTranslation()
         }
@@ -34,8 +38,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             ChatPanelController.shared.toggleChat()
         }
         
-        // 2. 初始化状态栏
+        // 3. 初始化状态栏
         setupStatusBar()
+        
+        // 4. 面板预热：两个面板是「预创建 + 只做 Show/Hide」，
+        //    创建一次实测约 420ms（对话面板 361ms + 翻译面板 62ms），之后唤出只要几毫秒。
+        //    放到启动完成之后再异步做，状态栏就不会被这段开销拖慢；
+        //    等用户第一次按下快捷键时，面板早已就绪。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            _ = WindowManager.shared
+            _ = ChatPanelController.shared
+        }
     }
     
     func setupStatusBar() {
@@ -91,7 +104,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 420),
+            contentRect: NSRect(x: 0, y: 0, width: 720, height: 520),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false

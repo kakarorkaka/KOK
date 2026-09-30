@@ -153,6 +153,7 @@ struct ChatView: View {
                         MessageRow(
                             message: message,
                             isStreaming: viewModel.isStreaming,
+                            isGeneratingImage: viewModel.isGeneratingImage,
                             onCopy: { viewModel.copy($0) }
                         )
                     }
@@ -384,6 +385,7 @@ struct ChatView: View {
 struct MessageRow: View {
     let message: ChatMessage
     let isStreaming: Bool
+    let isGeneratingImage: Bool
     let onCopy: (String) -> Void
     
     var body: some View {
@@ -409,29 +411,33 @@ struct MessageRow: View {
             
         case .assistant:
             VStack(alignment: .leading, spacing: 6) {
-                if message.hasGeneratedImage {
-                    ForEach(Array(message.parts.enumerated()), id: \.offset) { _, part in
-                        if case .generatedImage(let image) = part {
-                            GeneratedImageView(image: image)
-                        }
-                    }
-                } else if message.content.isEmpty {
+                if message.content.isEmpty && !message.hasGeneratedImage {
                     HStack(spacing: 6) {
                         ProgressView().scaleEffect(0.5)
-                        Text("Thinking…")
+                        Text(isGeneratingImage ? "正在生成图片…（约 10–20 秒）" : "Thinking…")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
                 } else {
-                    MarkdownText(raw: message.content)
-                    
-                    if !isStreaming {
-                        Button { onCopy(message.content) } label: {
-                            Label("复制", systemImage: "doc.on.doc")
-                                .font(.system(size: 11))
+                    if !message.content.isEmpty {
+                        MarkdownText(raw: message.content)
+                        
+                        if !isStreaming {
+                            Button { onCopy(message.content) } label: {
+                                Label("复制", systemImage: "doc.on.doc")
+                                    .font(.system(size: 11))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundColor(.secondary)
                         }
-                        .buttonStyle(.plain)
-                        .foregroundColor(.secondary)
+                    }
+                    
+                    let images = message.parts.compactMap { part -> GeneratedImage? in
+                        if case .generatedImage(let image) = part { return image }
+                        return nil
+                    }
+                    ForEach(Array(images.enumerated()), id: \.element.fileURL) { _, image in
+                        GeneratedImageView(image: image)
                     }
                 }
             }

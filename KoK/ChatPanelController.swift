@@ -58,8 +58,9 @@ final class ChatPanelController: PanelController {
     /// 按下快捷键：面板以「不抢焦点」的方式弹出（否则模拟 ⌘C 会抓不到原 App 的选中内容），
     /// 同时立刻开始录音——用户按下时已经在说话了。
     func beginVoice() {
-        // 不激活 App：原 App 保持焦点，稍后模拟 ⌘C 才能抓到它的选中内容
-        showWindow(activate: false)
+        // 不激活 App、也不抢 key window：
+        // 原 App 必须继续持有键盘焦点，稍后模拟的 ⌘C 才能落到它身上
+        showWindow(activate: false, makeKey: false)
         viewModel.beginVoice(captureSelection: true)
     }
     

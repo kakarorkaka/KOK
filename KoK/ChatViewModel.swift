@@ -120,6 +120,8 @@ final class ChatViewModel: ObservableObject {
         isListening = true
         wantsSelection = captureSelection
         
+        Diagnostics.log("voice: 按下  录音权限(麦克风=\(VoiceInputService.microphoneAuthorized) 语音=\(VoiceInputService.speechAuthorized))")
+        
         // 首次使用会在这里弹系统权限对话框，所以录音启动是异步的；
         // endVoiceAndSend 会等这个任务结束再收尾。
         voiceStartTask?.cancel()
@@ -176,6 +178,8 @@ final class ChatViewModel: ObservableObject {
             // 启动阶段已经报过错（权限被拒、没有输入设备），就不要再覆盖成「没听清」
             guard self.voiceError == nil else { return }
             
+            Diagnostics.log("voice: 松开  准备抓选中内容=\(shouldCapture)")
+            
             var captured: SelectionProvider.Capture?
             if shouldCapture {
                 // 松手后等一下再抓：让 ⌥ 彻底松开，
@@ -191,6 +195,9 @@ final class ChatViewModel: ObservableObject {
             
             if let captured, !captured.isEmpty {
                 self.context = captured
+                Diagnostics.log("voice: 附带上下文  文本=\(captured.text?.count ?? 0)字  图片=\(captured.image != nil ? "有" : "无")")
+            } else {
+                Diagnostics.log("voice: 没有拿到上下文，只发语音指令")
             }
             
             let text = spoken.trimmingCharacters(in: .whitespacesAndNewlines)

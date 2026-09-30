@@ -34,18 +34,49 @@ enum SelectionProvider {
     static func capture(timeout: TimeInterval = 0.6) async -> Capture {
         let pasteboard = NSPasteboard.general
         let before = pasteboard.changeCount
+        let trusted = AXIsProcessTrusted()
+        let started = Date()
+        
+        // 先看一眼「按快捷键之前」剪贴板里是不是已经有图片
+        let existingImage = ImageEncoder.encode(pasteboard: pasteboard)
+        
+        Diagnostics.log("capture: 开始  辅助功能=\(trusted ? "已授权" : "未授权")  changeCount=\(before)"
+                        + "  按之前已有图片=\(existingImage != nil ? "是" : "否")")
+        Diagnostics.log("capture: 剪贴板类型 = \(pasteboardTypes(pasteboard))")
         
         postCopyCommand()
         
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if pasteboard.changeCount != before {
-                return read(from: pasteboard)
+                let capture = read(from: pasteboard)
+                let ms = Int(Date().timeIntervalSince(started) * 1000)
+                Diagnostics.log("capture: 剪贴板已变  \(ms)ms  changeCount=\(before)→\(pasteboard.changeCount)"
+                                + "  文本=\(capture.text?.count ?? 0)字  图片=\(capture.image != nil ? "有" : "无")")
+                return capture
             }
             try? await Task.sleep(nanoseconds: 25_000_000)
         }
         
+        let ms = Int(Date().timeIntervalSince(started) * 1000)
+        Diagnostics.log("capture: 超时  \(ms)ms  剪贴板始终没变。当前类型 = \(pasteboardTypes(pasteboard))")
+        
+        // 超时说明「模拟 ⌘C 没抓到任何选中内容」。
+        // 文本此时严格不用旧内容——否则会把上次复制的文字误当成选中内容。
+        // 图片是例外：图片本来就没有「选中」这个概念，用户的实际操作就是
+        // 先复制图片、再按快捷键，所以按之前就存在的图片应当采用。
+        if let existingImage {
+            Diagnostics.log("capture: 采用按之前已存在的图片作为上下文"
+                            + "  \(existingImage.dimensionText)  \(existingImage.sizeText)")
+            return Capture(text: nil, image: existingImage)
+        }
+        
         return Capture()
+    }
+    
+    private static func pasteboardTypes(_ pasteboard: NSPasteboard) -> String {
+        let types = pasteboard.types?.map(\.rawValue) ?? []
+        return types.isEmpty ? "（空）" : types.joined(separator: ", ")
     }
     
     // MARK: - 读取

@@ -63,7 +63,7 @@ class PanelController: NSObject {
     /// 显示在鼠标附近，并自动避免超出屏幕。
     /// - Parameter activate: 是否把 App 提到前台。语音场景要传 false——
     ///   一旦抢走焦点，模拟 ⌘C 就抓不到原来那个 App 里选中的内容了。
-    func showWindow(activate: Bool = true) {
+    func showWindow(activate: Bool = true, makeKey: Bool = true) {
         guard let panel = panel, let screen = NSScreen.main else { return }
         onWillShow?()
         
@@ -85,10 +85,17 @@ class PanelController: NSObject {
         if y + panelHeight > screenFrame.maxY { y = screenFrame.maxY - panelHeight }
         
         panel.setFrameOrigin(NSPoint(x: x, y: y))
-        panel.makeKeyAndOrderFront(nil)
+        if makeKey {
+            panel.makeKeyAndOrderFront(nil)
+        } else {
+            // 只显示、不成为 key window：让原 App 继续持有键盘焦点，
+            // 否则接下来模拟的 ⌘C 会打到我们自己身上，抓不到它的选中内容
+            panel.orderFrontRegardless()
+        }
         if activate {
             NSApp.activate()
         }
+        Diagnostics.log("panel: 显示  activate=\(activate)  makeKey=\(makeKey)")
         
         startMonitors()
     }

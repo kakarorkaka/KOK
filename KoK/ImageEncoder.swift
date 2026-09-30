@@ -33,13 +33,26 @@ enum ImageEncoder {
     static let maxDimension: CGFloat = 1024
     static let jpegQuality: CGFloat = 0.8
     
-    static func encode(_ image: NSImage) -> ImageAttachment? {
-        guard let tiff = image.tiffRepresentation,
-              let source = NSBitmapImageRep(data: tiff)
-        else { return nil }
+    /// 用 ImageIO 生成缩略图，而不是自己开离屏画布重绘。
+    ///
+    /// 之前用 `NSGraphicsContext(bitmapImageRep:)` + `draw(in:)` 手写缩放，
+    /// 结果整张图变成纯黑——离屏绘制在后台上下文里静默失败了。
+    /// ImageIO 是 Apple 推荐的缩放路径，顺带还能按 EXIF 自动纠正方向。
+    static func encode(data: Data) -> ImageAttachment? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         
-        let target = downscaled(source)
-        guard let jpeg = target.representation(
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: Int(maxDimension),
+        ]
+        
+        guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+        
+        let rep = NSBitmapImageRep(cgImage: thumbnail)
+        guard let jpeg = rep.representation(
             using: .jpeg,
             properties: [.compressionFactor: jpegQuality]
         ) else { return nil }
@@ -47,15 +60,15 @@ enum ImageEncoder {
         return ImageAttachment(
             base64: jpeg.base64EncodedString(),
             mimeType: "image/jpeg",
-            width: target.pixelsWide,
-            height: target.pixelsHigh,
+            width: thumbnail.width,
+            height: thumbnail.height,
             byteCount: jpeg.count
         )
     }
     
-    static func encode(data: Data) -> ImageAttachment? {
-        guard let image = NSImage(data: data) else { return nil }
-        return encode(image)
+    static func encode(_ image: NSImage) -> ImageAttachment? {
+        guard let tiff = image.tiffRepresentation else { return nil }
+        return encode(data: tiff)
     }
     
     /// 从剪贴板取图片（用户复制图片 / 截图后都在这里）

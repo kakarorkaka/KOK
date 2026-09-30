@@ -15,9 +15,8 @@ import Combine
 /// 一个动作对应一个全局快捷键。新增功能只需在这里加一个 case。
 enum HotKeyAction: String, CaseIterable, Identifiable {
     case translate
+    /// 合并键：点按打开对话面板，按住开始录音
     case chat
-    /// 按住说话：按下开始录音、松开结束并发送
-    case voice
     /// 框选屏幕区域作为上下文
     case screenshot
     
@@ -27,7 +26,6 @@ enum HotKeyAction: String, CaseIterable, Identifiable {
         switch self {
         case .translate: return "翻译"
         case .chat: return "对话"
-        case .voice: return "语音"
         case .screenshot: return "截图"
         }
     }
@@ -35,7 +33,7 @@ enum HotKeyAction: String, CaseIterable, Identifiable {
     /// 说明文字，用在设置页的注释里
     var hint: String? {
         switch self {
-        case .voice: return "按住说话，松开后连同选中内容一起发送"
+        case .chat: return "点按打开，按住说话（带选中内容）"
         case .screenshot: return "框选屏幕区域，作为上下文"
         default: return nil
         }
@@ -50,7 +48,6 @@ enum HotKeyAction: String, CaseIterable, Identifiable {
         switch self {
         case .translate: return (.d, [.option])
         case .chat: return (.one, [.command])
-        case .voice: return (.v, [.option])
         // ⌥S / ⌥A 都被 iShot 占了（区域截图 / 快速截图）
         case .screenshot: return (.c, [.option])
         }

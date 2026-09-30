@@ -4,6 +4,8 @@
 //
 //  快速问答面板的窗口控制器。面板行为全部复用 `PanelController` 基类。
 //
+//  快捷键语义：同一个键，点按打开面板，按住说话。
+//
 
 import AppKit
 import SwiftUI
@@ -20,6 +22,15 @@ final class ChatPanelController: PanelController {
     override var preferredHeight: CGFloat { 420 }
     override var minimumSize: NSSize { NSSize(width: 360, height: 240) }
     override var maximumSize: NSSize { NSSize(width: 1000, height: 1000) }
+    
+    /// 点按与按住的分界。快速点按通常 50–150ms，刻意按住一般超过 250ms。
+    private static let holdThreshold: TimeInterval = 0.18
+    
+    /// 「刚过阈值就松手」的宽限：录了不到这么久且没识别到内容，按慢速点按处理
+    private static let slowTapGrace: TimeInterval = 0.5
+    
+    private var holdTask: Task<Void, Never>?
+    private var isHolding = false
     
     private override init() {
         super.init()
@@ -42,36 +53,70 @@ final class ChatPanelController: PanelController {
         }
         
         onWillShow = {
-            // 只做与翻译面板的互斥。焦点交给输入框放在 toggleChat 里做——
-            // 语音路径不能抢焦点，否则模拟 ⌘C 抓不到原 App 选中的内容。
+            // 只做与翻译面板的互斥，焦点统一由 openChat / 语音流程处理
             WindowManager.shared.hideWindow()
         }
     }
     
-    func toggleChat() {
-        if isVisible {
-            hideWindow()
-            return
+    // MARK: - 打开（点按 / 左键 / 菜单）
+    
+    /// 打开面板并聚焦输入框。已可见时只聚焦、不关闭——
+    /// 否则「按住问完 → 点按追问」会变成把面板关了。
+    func openChat() {
+        if !isVisible {
+            showWindow(activate: true)
+        } else {
+            panel?.makeKeyAndOrderFront(nil)
+            NSApp.activate()
         }
-        showWindow(activate: true)
         viewModel.requestFocus()
     }
     
-    // MARK: - 按住说话
+    // MARK: - 合并键：点按 / 按住
     
-    /// 按下快捷键：面板以「不抢焦点」的方式弹出（否则模拟 ⌘C 会抓不到原 App 的选中内容），
-    /// 同时立刻开始录音——用户按下时已经在说话了。
-    func beginVoice() {
-        // 不激活 App、也不抢 key window：
-        // 原 App 必须继续持有键盘焦点，稍后模拟的 ⌘C 才能落到它身上
+    /// 按下：面板先以不抢焦点的方式弹出（按住时要模拟 ⌘C，焦点必须留在原 App），
+    /// 同时启动判别计时器。
+    func chatKeyDown() {
+        guard !isHolding else { return }
+        
         showWindow(activate: false, makeKey: false)
-        viewModel.beginVoice(captureSelection: true)
+        
+        holdTask?.cancel()
+        holdTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.holdThreshold * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.isHolding = true
+            self?.viewModel.beginVoice(captureSelection: true)
+        }
     }
     
-    /// 松开快捷键：结束录音，连同选中内容一起发送
-    func endVoice() {
-        viewModel.endVoiceAndSend()
+    /// 松开：按住了就结束录音发送；没按住就是点按，补上焦点。
+    func chatKeyUp() {
+        if isHolding {
+            isHolding = false
+            
+            // 刚过阈值就松手、又没识别到内容：其实是慢速点按，别弹「没听清」
+            if viewModel.voice.transcript.isEmpty
+                && viewModel.voice.recordingDuration < Self.slowTapGrace {
+                viewModel.cancelVoice()
+                focusPanel()
+            } else {
+                viewModel.endVoiceAndSend()
+            }
+        } else {
+            holdTask?.cancel()
+            holdTask = nil
+            focusPanel()
+        }
     }
+    
+    private func focusPanel() {
+        panel?.makeKeyAndOrderFront(nil)
+        NSApp.activate()
+        viewModel.requestFocus()
+    }
+    
+    // MARK: - 截图
     
     /// 框选屏幕区域作为上下文。截图期间不显示面板，免得被截进去。
     func captureScreenshot() {

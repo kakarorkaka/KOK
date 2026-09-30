@@ -192,6 +192,12 @@ final class VoiceInputService: ObservableObject {
         transcript = ""
     }
     
+    /// 已录了多久（用来把「刚过阈值就松手」识别成慢速点按）
+    var recordingDuration: TimeInterval {
+        guard let startedAt else { return 0 }
+        return Date().timeIntervalSince(startedAt)
+    }
+    
     /// 录音超时（keyUp 丢失时的兜底判断）
     var isOverTimeLimit: Bool {
         guard let startedAt else { return false }

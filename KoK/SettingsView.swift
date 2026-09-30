@@ -48,14 +48,21 @@ struct GeneralSettingsTab: View {
         Form {
             Section {
                 ForEach(HotKeyAction.allCases) { action in
-                    LabeledContent(action.title) {
-                        ShortcutRecorder(action: action)
+                    VStack(alignment: .leading, spacing: 2) {
+                        LabeledContent(action.title) {
+                            ShortcutRecorder(action: action)
+                        }
+                        if let hint = action.hint {
+                            Text(hint)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
             } header: {
                 Text("快捷键")
             } footer: {
-                Text("翻译读取选中文字，对话开输入框，语音按住说话，截图框选屏幕。没反应时点「测试」。")
+                Text("翻译读取选中文字，截图框选屏幕；对话是合并键——点按打开、按住说话。没反应时点「测试」。")
             }
             
             Section {

@@ -213,6 +213,17 @@ final class ChatViewModel: ObservableObject {
         context = nil
     }
     
+    /// 取消当前录音（点按误判、用户改主意等），不留任何痕迹
+    func cancelVoice() {
+        voice.cancel()
+        isListening = false
+        voiceTimeoutTask?.cancel()
+        voiceTimeoutTask = nil
+        voiceStartTask?.cancel()
+        voiceStartTask = nil
+        wantsSelection = false
+    }
+    
     /// 从翻译面板追问：把原文 + 译文作为上下文带进来，用户接着打字即可
     func followUp(source: String, translated: String) {
         context = SelectionProvider.Capture(

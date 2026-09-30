@@ -36,15 +36,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         HotKeyManager.shared.handlers[.translate] = {
             WindowManager.shared.toggleTranslation()
         }
+        // 合并键：点按打开，按住说话
         HotKeyManager.shared.handlers[.chat] = {
-            ChatPanelController.shared.toggleChat()
+            ChatPanelController.shared.chatKeyDown()
         }
-        // 按住说话：按下开录，松开发送
-        HotKeyManager.shared.handlers[.voice] = {
-            ChatPanelController.shared.beginVoice()
-        }
-        HotKeyManager.shared.releaseHandlers[.voice] = {
-            ChatPanelController.shared.endVoice()
+        HotKeyManager.shared.releaseHandlers[.chat] = {
+            ChatPanelController.shared.chatKeyUp()
         }
         HotKeyManager.shared.handlers[.screenshot] = {
             ChatPanelController.shared.captureScreenshot()
@@ -106,7 +103,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             statusItem?.menu = nil
         } else {
             // 左键 → 打开对话（最高频动作）；设置收进右键菜单
-            ChatPanelController.shared.toggleChat()
+            ChatPanelController.shared.openChat()
         }
     }
     
@@ -137,7 +134,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     @objc func openChat() {
-        ChatPanelController.shared.toggleChat()
+        ChatPanelController.shared.openChat()
     }
     
     @objc func openSettings() {

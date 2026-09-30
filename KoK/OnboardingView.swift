@@ -48,8 +48,7 @@ struct OnboardingView: View {
             
             VStack(alignment: .leading, spacing: 6) {
                 shortcutRow(shortcut(for: .translate), "翻译选中文字")
-                shortcutRow(shortcut(for: .chat), "打开对话")
-                shortcutRow(shortcut(for: .voice), "按住说话（带选中内容）")
+                shortcutRow(shortcut(for: .chat), "点按打开，按住说话（带选中内容）")
                 shortcutRow(shortcut(for: .screenshot), "框选截图作为上下文")
             }
             .padding(10)

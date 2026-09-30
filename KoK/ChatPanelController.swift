@@ -33,6 +33,10 @@ final class ChatPanelController: PanelController {
         }
         installContent(contentView)
         
+        viewModel.onVoiceReadyToSend = { [weak self] in
+            self?.activatePanel()
+        }
+        
         onWillShow = {
             // 只做与翻译面板的互斥。焦点交给输入框放在 toggleChat 里做——
             // 语音路径不能抢焦点，否则模拟 ⌘C 抓不到原 App 选中的内容。
@@ -62,5 +66,11 @@ final class ChatPanelController: PanelController {
     /// 松开快捷键：结束录音，连同选中内容一起发送
     func endVoice() {
         viewModel.endVoiceAndSend()
+    }
+    
+    /// 把面板提到前台（只在选中内容已经抓完之后调用）
+    private func activatePanel() {
+        panel?.makeKeyAndOrderFront(nil)
+        NSApp.activate()
     }
 }

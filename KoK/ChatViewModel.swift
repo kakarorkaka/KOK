@@ -32,6 +32,11 @@ final class ChatViewModel: ObservableObject {
     private var voiceStartTask: Task<Void, Never>?
     /// 本次录音是否需要抓取选中内容
     private var wantsSelection = false
+    
+    /// 语音即将发送时的回调。
+    /// 语音弹出时是「不激活 App」的（否则抓不到原 App 的选中内容），
+    /// 到这里选中内容已经抓完，把面板提到前台就不会再有副作用了。
+    var onVoiceReadyToSend: (() -> Void)?
     private var cancellables = Set<AnyCancellable>()
     
     init() {
@@ -180,6 +185,9 @@ final class ChatViewModel: ObservableObject {
             }
             
             let spoken = await self.voice.finish()
+            
+            // 抓取已完成，现在可以安全地把面板提到前台
+            self.onVoiceReadyToSend?()
             
             if let captured, !captured.isEmpty {
                 self.context = captured

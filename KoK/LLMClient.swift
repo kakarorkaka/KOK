@@ -17,6 +17,8 @@ import Foundation
 enum MessagePart: Equatable {
     case text(String)
     case image(ImageAttachment)
+    /// 模型生成的图片（本地全尺寸文件）。只用于展示，永远不会发给模型。
+    case generatedImage(GeneratedImage)
 }
 
 /// 一条消息。翻译也复用它：system 放提示词，user 放原文。
@@ -39,9 +41,18 @@ struct ChatMessage: Identifiable, Equatable {
         }.joined()
     }
     
+    /// 有没有「输入」图片（发给模型的参考图）
     var hasImage: Bool {
         parts.contains { part in
             if case .image = part { return true }
+            return false
+        }
+    }
+    
+    /// 有没有「生成结果」图片（模型返回的图）
+    var hasGeneratedImage: Bool {
+        parts.contains { part in
+            if case .generatedImage = part { return true }
             return false
         }
     }
@@ -248,7 +259,8 @@ class LLMClient {
             return text
         }
         
-        return parts.map { part -> [String: Any] in
+        // generatedImage 是展示用的，滤掉，绝不发给模型
+        return parts.compactMap { part -> [String: Any]? in
             switch part {
             case .text(let text):
                 return ["type": "text", "text": text]
@@ -257,6 +269,8 @@ class LLMClient {
                     "type": "image_url",
                     "image_url": ["url": "data:\(image.mimeType);base64,\(image.base64)"],
                 ]
+            case .generatedImage:
+                return nil
             }
         }
     }
@@ -321,6 +335,8 @@ class LLMClient {
                         "data": image.base64,
                     ]
                 ])
+            case .generatedImage:
+                continue
             }
         }
         

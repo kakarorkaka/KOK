@@ -24,6 +24,12 @@ final class ChatViewModel: ObservableObject {
     @Published var context: SelectionProvider.Capture?
     /// 是否正在录音
     @Published var isListening = false
+    /// 生图模式：输入框的内容当提示词，截图/图片上下文当参考图
+    @Published var isImageMode = false
+    /// 是否正在生图
+    @Published var isGeneratingImage = false
+    /// 生成尺寸（auto 时不传 size，由模型决定）
+    @Published var imageSize: ImageGenSize = .auto
     /// 语音相关错误（权限、没听清等）
     @Published var voiceError: String?
     
@@ -45,6 +51,16 @@ final class ChatViewModel: ObservableObject {
         voice.objectWillChange
             .sink { [weak self] in self?.objectWillChange.send() }
             .store(in: &cancellables)
+        
+        if let saved = UserDefaults.standard.string(forKey: "image_gen_size"),
+           let size = ImageGenSize(rawValue: saved) {
+            imageSize = size
+        }
+    }
+    
+    func selectImageSize(_ size: ImageGenSize) {
+        imageSize = size
+        UserDefaults.standard.set(size.rawValue, forKey: "image_gen_size")
     }
     
     let engineManager = EngineManager.shared
@@ -60,7 +76,7 @@ final class ChatViewModel: ObservableObject {
     }
     
     var canSend: Bool {
-        !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isStreaming
+        !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isStreaming && !isGeneratingImage
     }
     
     // MARK: - 外部动作
@@ -74,6 +90,11 @@ final class ChatViewModel: ObservableObject {
     }
     
     func send() {
+        if isImageMode {
+            sendImagePrompt()
+            return
+        }
+        
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isStreaming else { return }
         guard let config = engineManager.selectedChatEngine else {
@@ -231,6 +252,55 @@ final class ChatViewModel: ObservableObject {
             label: "原文 + 译文"
         )
         onNeedsForeground?()
+    }
+    
+    // MARK: - 生图
+    
+    /// 生图：输入是提示词，上下文里的图片（截图/复制）作为参考图。
+    /// 生成结果作为 assistant 消息里的 generatedImage 展示。
+    func sendImagePrompt() {
+        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !isGeneratingImage, !isStreaming else { return }
+        
+        let manager = engineManager
+        guard !manager.imageGenAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            errorMessage = "还没有配置生图服务：设置 ▸ 通用 ▸ 生图，填入 API Key"
+            return
+        }
+        
+        input = ""
+        errorMessage = nil
+        
+        var parts: [MessagePart] = []
+        if let image = context?.image {
+            parts.append(.image(image))
+        }
+        parts.append(.text(text))
+        messages.append(ChatMessage(role: .user, parts: parts))
+        
+        let reference = context?.image
+        context = nil
+        
+        isGeneratingImage = true
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await ImageGenerationService().generate(
+                    prompt: text,
+                    reference: reference,
+                    url: manager.imageGenURL,
+                    apiKey: manager.imageGenAPIKey,
+                    model: manager.imageGenModel,
+                    size: self.imageSize.sizeParam
+                )
+                self.messages.append(ChatMessage(role: .assistant, parts: [.generatedImage(result)]))
+            } catch {
+                if !Task.isCancelled {
+                    self.errorMessage = error.localizedDescription
+                }
+            }
+            self.isGeneratingImage = false
+        }
     }
     
     // MARK: - 截图

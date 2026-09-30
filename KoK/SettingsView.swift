@@ -33,6 +33,9 @@ struct SettingsView: View {
 
 struct GeneralSettingsTab: View {
     @AppStorage("voice_locale") private var voiceLocale = VoiceLocale.chinese.rawValue
+    @AppStorage("image_gen_url") private var imageGenURL = ImageGenerationService.defaultURL
+    @AppStorage("image_gen_api_key") private var imageGenAPIKey = ""
+    @AppStorage("image_gen_model") private var imageGenModel = ImageGenerationService.defaultModel
     
     @State private var launchAtLogin: Bool = {
         if #available(macOS 13.0, *) {
@@ -88,6 +91,28 @@ struct GeneralSettingsTab: View {
                 Text("语音与截图")
             } footer: {
                 Text("语音识别在本机完成，录音不出设备。")
+            }
+            
+            Section {
+                LabeledContent("接口地址") {
+                    TextField("", text: $imageGenURL)
+                        .textFieldStyle(.roundedBorder)
+                }
+                
+                LabeledContent("API Key") {
+                    SecureField("", text: $imageGenAPIKey)
+                        .textFieldStyle(.roundedBorder)
+                        .layoutPriority(1)
+                }
+                
+                LabeledContent("模型") {
+                    TextField("", text: $imageGenModel)
+                        .textFieldStyle(.roundedBorder)
+                }
+            } header: {
+                Text("生图")
+            } footer: {
+                Text("腾讯混元：在对话面板点 ✨ 进入生图模式；图片上下文（截图/复制）会作为参考图。")
             }
             
             Section {

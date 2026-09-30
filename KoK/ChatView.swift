@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ChatView: View {
     @ObservedObject var viewModel: ChatViewModel
@@ -209,7 +210,50 @@ struct ChatView: View {
     
     private var inputBar: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            TextField("问点什么…（↵ 发送，⇧↵ 换行）", text: $viewModel.input, axis: .vertical)
+            // 生图模式开关
+            Button {
+                viewModel.isImageMode.toggle()
+            } label: {
+                Image(systemName: "wand.and.stars")
+                    .font(.system(size: 17))
+                    .foregroundColor(viewModel.isImageMode ? .accentColor : .secondary)
+            }
+            .buttonStyle(.plain)
+            .help(viewModel.isImageMode ? "退出生图模式" : "生图模式：输入当提示词，图片上下文当参考图")
+            
+            if viewModel.isImageMode {
+                Menu {
+                    ForEach(ImageGenSize.allCases) { size in
+                        Button { viewModel.selectImageSize(size) } label: {
+                            HStack {
+                                Text(size.title)
+                                if size == viewModel.imageSize {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "aspectratio")
+                            .font(.system(size: 10))
+                        Text(viewModel.imageSize.title)
+                            .font(.system(size: 11))
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 8))
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .background(Color.primary.opacity(0.06))
+                    .cornerRadius(6)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+            }
+            
+            TextField(
+                viewModel.isImageMode ? "描述你想生成的图片…" : "问点什么…（↵ 发送，⇧↵ 换行）",
+                text: $viewModel.input, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
                 .lineLimit(1...6)
@@ -240,13 +284,13 @@ struct ChatView: View {
             .help(viewModel.isListening ? "结束并发送" : "语音输入")
             
             Button { viewModel.send() } label: {
-                Image(systemName: "arrow.up.circle.fill")
+                Image(systemName: viewModel.isImageMode ? "sparkles" : "arrow.up.circle.fill")
                     .font(.system(size: 20))
                     .foregroundColor(viewModel.canSend ? .accentColor : Color.secondary.opacity(0.4))
             }
             .buttonStyle(.plain)
             .disabled(!viewModel.canSend)
-            .help("发送 (↵)")
+            .help(viewModel.isImageMode ? "生成图片 (↵)" : "发送 (↵)")
         }
         .padding(12)
         .background(Color.primary.opacity(0.02))
@@ -365,7 +409,13 @@ struct MessageRow: View {
             
         case .assistant:
             VStack(alignment: .leading, spacing: 6) {
-                if message.content.isEmpty {
+                if message.hasGeneratedImage {
+                    ForEach(Array(message.parts.enumerated()), id: \.offset) { _, part in
+                        if case .generatedImage(let image) = part {
+                            GeneratedImageView(image: image)
+                        }
+                    }
+                } else if message.content.isEmpty {
                     HStack(spacing: 6) {
                         ProgressView().scaleEffect(0.5)
                         Text("Thinking…")
@@ -517,5 +567,86 @@ struct CodeBlock: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(Color.primary.opacity(0.08), lineWidth: 1)
         )
+    }
+}
+
+// MARK: - 生成结果图片卡片
+
+struct GeneratedImageView: View {
+    let image: GeneratedImage
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let nsImage = NSImage(contentsOf: image.fileURL) {
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: 340, maxHeight: 340)
+                    .cornerRadius(8)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+                    )
+                    .onTapGesture {
+                        NSWorkspace.shared.open(image.fileURL)
+                    }
+                    .help("点击用默认应用打开原图")
+            } else {
+                Text("图片加载失败")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            
+            HStack(spacing: 12) {
+                Text("\(image.dimensionText) · \(image.sizeText)")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                
+                Spacer()
+                
+                Button { copyToPasteboard() } label: {
+                    Label("复制", systemImage: "doc.on.doc").font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+                .help("复制原图到剪贴板")
+                
+                Button { saveToDownloads() } label: {
+                    Label("保存", systemImage: "square.and.arrow.down").font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+                .help("保存到「下载」文件夹")
+                
+                Button {
+                    NSWorkspace.shared.open(image.fileURL)
+                } label: {
+                    Label("打开", systemImage: "eye").font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+                .help("用默认应用打开原图")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    
+    private func copyToPasteboard() {
+        guard let data = try? Data(contentsOf: image.fileURL) else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setData(data, forType: .png)
+    }
+    
+    private func saveToDownloads() {
+        guard let data = try? Data(contentsOf: image.fileURL) else { return }
+        
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "kok-\(Int(Date().timeIntervalSince1970)).png"
+        panel.allowedContentTypes = [.png]
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            try? data.write(to: url)
+        }
     }
 }

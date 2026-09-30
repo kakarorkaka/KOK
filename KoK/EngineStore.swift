@@ -486,6 +486,21 @@ class EngineManager: ObservableObject {
         UserDefaults.standard.set(id.uuidString, forKey: chatEngineKey)
     }
     
+    // MARK: - 生图配置
+    
+    /// 生图接口地址（腾讯混元 wand）。设置页用 @AppStorage 直接读写同名的键。
+    var imageGenURL: String {
+        UserDefaults.standard.string(forKey: "image_gen_url") ?? ImageGenerationService.defaultURL
+    }
+    
+    var imageGenAPIKey: String {
+        UserDefaults.standard.string(forKey: "image_gen_api_key") ?? ""
+    }
+    
+    var imageGenModel: String {
+        UserDefaults.standard.string(forKey: "image_gen_model") ?? ImageGenerationService.defaultModel
+    }
+    
     /// 语音识别语言。设置页用 @AppStorage("voice_locale") 直接读写这个键。
     var voiceLocale: String {
         UserDefaults.standard.string(forKey: "voice_locale") ?? VoiceLocale.chinese.rawValue

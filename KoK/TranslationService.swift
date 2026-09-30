@@ -9,6 +9,13 @@ import Foundation
 
 // MARK: - 翻译结果
 
+/// 一次翻译的目标：给 DeepL 的语言代码 + 给提示词的语言名
+struct TranslationTarget {
+    let code: String
+    let languageName: String
+    let sourceName: String
+}
+
 struct TranslationResult {
     let text: String
     let sourceLang: String?
@@ -22,14 +29,14 @@ struct TranslationResult {
 class UnifiedTranslationService {
     
     /// 一次性返回整段译文
-    func translate(text: String, to targetLang: String, using config: EngineConfig) async throws -> TranslationResult {
+    func translate(text: String, to target: TranslationTarget, using config: EngineConfig) async throws -> TranslationResult {
         switch config.type {
         case .deepL:
-            return try await translateWithDeepL(text: text, targetLang: targetLang, config: config)
+            return try await translateWithDeepL(text: text, target: target, config: config)
             
         case .openAICompatible, .gemini:
             let translated = try await LLMClient().complete(
-                messages: messages(for: text, targetLang: targetLang),
+                messages: messages(for: text, target: target),
                 using: config
             )
             return TranslationResult(text: translated, sourceLang: "Auto")
@@ -40,13 +47,13 @@ class UnifiedTranslationService {
     /// DeepL 是同步接口，包一层让调用方统一按流处理。
     func translateStream(
         text: String,
-        to targetLang: String,
+        to target: TranslationTarget,
         using config: EngineConfig
     ) -> AsyncThrowingStream<String, Error> {
         switch config.type {
         case .openAICompatible, .gemini:
             return LLMClient().stream(
-                messages: messages(for: text, targetLang: targetLang),
+                messages: messages(for: text, target: target),
                 using: config
             )
             
@@ -55,7 +62,7 @@ class UnifiedTranslationService {
                 let task = Task {
                     do {
                         let result = try await self.translateWithDeepL(
-                            text: text, targetLang: targetLang, config: config
+                            text: text, target: target, config: config
                         )
                         continuation.yield(result.text)
                         continuation.finish()
@@ -70,9 +77,9 @@ class UnifiedTranslationService {
     
     // MARK: - 请求组装
     
-    private func messages(for text: String, targetLang: String) -> [ChatMessage] {
+    private func messages(for text: String, target: TranslationTarget) -> [ChatMessage] {
         [
-            ChatMessage(role: .system, content: resolvePrompt(targetLang: targetLang)),
+            ChatMessage(role: .system, content: resolvePrompt(target: target)),
             ChatMessage(role: .user, content: text),
         ]
     }
@@ -81,7 +88,7 @@ class UnifiedTranslationService {
     
     private func translateWithDeepL(
         text: String,
-        targetLang: String,
+        target: TranslationTarget,
         config: EngineConfig
     ) async throws -> TranslationResult {
         guard !config.resolvedAPIKey.isEmpty else {
@@ -95,7 +102,7 @@ class UnifiedTranslationService {
         request.setValue("DeepL-Auth-Key \(config.resolvedAPIKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        let body: [String: Any] = ["text": [text], "target_lang": targetLang]
+        let body: [String: Any] = ["text": [text], "target_lang": target.code]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -122,7 +129,7 @@ class UnifiedTranslationService {
     
     // MARK: - 提示词解析
     
-    private func resolvePrompt(targetLang: String) -> String {
+    private func resolvePrompt(target: TranslationTarget) -> String {
         // 只认全局提示词；留空时回退到内置默认值，
         // 否则会把空的 system message 发给模型
         let manager = EngineManager.shared
@@ -130,7 +137,11 @@ class UnifiedTranslationService {
             ? EngineConfig.defaultSystemPrompt
             : manager.globalSystemPrompt
         
-        return PromptTemplate.fill(template, targetLang: targetLang)
+        return PromptTemplate.fill(
+            template,
+            targetLanguage: target.languageName,
+            sourceLanguage: target.sourceName
+        )
     }
 }
 

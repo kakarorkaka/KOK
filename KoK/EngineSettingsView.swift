@@ -463,8 +463,11 @@ private struct ProviderDetailView: View {
             do {
                 let summary: String
                 if provider.type == .deepL {
-                    let result = try await UnifiedTranslationService()
-                        .translate(text: "hello", to: "ZH", using: config)
+                    let result = try await UnifiedTranslationService().translate(
+                        text: "hello",
+                        to: TranslationTarget(code: "ZH", languageName: "Simplified Chinese", sourceName: "English"),
+                        using: config
+                    )
                     summary = "翻译正常：\(result.text.prefix(20))"
                 } else {
                     let text = try await LLMClient().complete(

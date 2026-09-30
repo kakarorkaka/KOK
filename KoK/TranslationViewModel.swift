@@ -8,6 +8,47 @@
 import SwiftUI
 import Combine
 
+// MARK: - 翻译方向
+
+/// 自动 = 原文含中文译成英文、其余译成中文；也可以手动指定目标语言
+enum TranslateDirection: String, CaseIterable, Identifiable {
+    case auto, zh, en, ja, ko
+    
+    var id: String { rawValue }
+    
+    var title: String {
+        switch self {
+        case .auto: return "自动"
+        case .zh: return "中文"
+        case .en: return "English"
+        case .ja: return "日本語"
+        case .ko: return "한국어"
+        }
+    }
+    
+    /// 目标语言名（提示词用）；auto 时由调用方按原文推导
+    var targetName: String {
+        switch self {
+        case .zh: return "Simplified Chinese"
+        case .en: return "English"
+        case .ja: return "Japanese"
+        case .ko: return "Korean"
+        case .auto: return ""
+        }
+    }
+    
+    /// DeepL 语言代码
+    var code: String {
+        switch self {
+        case .zh: return "ZH"
+        case .en: return "EN-US"
+        case .ja: return "JA"
+        case .ko: return "KO"
+        case .auto: return ""
+        }
+    }
+}
+
 // MARK: - 翻译历史记录
 struct TranslationRecord: Identifiable, Codable {
     let id: UUID
@@ -33,6 +74,7 @@ class TranslationViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var copyFeedback: Bool = false // 复制成功反馈
     @Published var history: [TranslationRecord] = []
+    @Published var direction: TranslateDirection = .auto
     
     let engineManager = EngineManager.shared
     
@@ -40,10 +82,15 @@ class TranslationViewModel: ObservableObject {
     private var outputTask: Task<Void, Never>?
     
     private let historyKey = "translation_history"
+    private let directionKey = "translation_direction"
     private let maxHistoryCount = 50
     
     init() {
         loadHistory()
+        if let saved = UserDefaults.standard.string(forKey: directionKey),
+           let stored = TranslateDirection(rawValue: saved) {
+            direction = stored
+        }
     }
     
     // 当前选中的引擎名
@@ -52,10 +99,6 @@ class TranslationViewModel: ObservableObject {
     }
     
     // 可用引擎列表（仅启用的）
-    var availableEngines: [EngineConfig] {
-        engineManager.engines.filter { $0.isEnabled }
-    }
-    
     func selectEngine(id: UUID) {
         engineManager.selectEngine(id: id)
         if !sourceText.isEmpty {
@@ -76,14 +119,14 @@ class TranslationViewModel: ObservableObject {
         
         outputTask?.cancel()
         
-        let targetLang = isContainsChinese(text) ? "EN-US" : "ZH"
+        let target = makeTarget(for: text)
         outputTask = Task { [weak self] in
             guard let self else { return }
             var received = false
             
             do {
                 // 流式：首字到达就显示，不再等整段生成完
-                for try await chunk in self.service.translateStream(text: text, to: targetLang, using: config) {
+                for try await chunk in self.service.translateStream(text: text, to: target, using: config) {
                     if Task.isCancelled { return }
                     received = true
                     self.translatedText += chunk
@@ -108,6 +151,38 @@ class TranslationViewModel: ObservableObject {
                     self.errorMessage = "翻译失败: \(error.localizedDescription)"
                 }
             }
+        }
+    }
+    
+    // MARK: - 方向
+    
+    private func makeTarget(for text: String) -> TranslationTarget {
+        let sourceIsChinese = isContainsChinese(text)
+        let sourceName = sourceIsChinese ? "Simplified Chinese" : "English"
+        
+        switch direction {
+        case .auto:
+            return TranslationTarget(
+                code: sourceIsChinese ? "EN-US" : "ZH",
+                languageName: sourceIsChinese ? "English" : "Simplified Chinese",
+                sourceName: sourceName
+            )
+        default:
+            return TranslationTarget(
+                code: direction.code,
+                languageName: direction.targetName,
+                sourceName: sourceName
+            )
+        }
+    }
+    
+    /// 切换方向并自动重译当前内容
+    func selectDirection(_ newDirection: TranslateDirection) {
+        guard direction != newDirection else { return }
+        direction = newDirection
+        UserDefaults.standard.set(newDirection.rawValue, forKey: directionKey)
+        if !sourceText.isEmpty {
+            translate(text: sourceText)
         }
     }
     

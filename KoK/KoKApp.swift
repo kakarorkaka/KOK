@@ -8,6 +8,7 @@
 import SwiftUI
 import HotKey
 import ServiceManagement
+import ApplicationServices
 
 @main
 struct KoKApp: App {
@@ -24,6 +25,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
+    private var onboardingPopover: NSPopover?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 1. 引擎配置必须立刻加载：它负责把旧版扁平结构迁移成「服务商 → 模型」，
@@ -50,6 +52,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // 3. 初始化状态栏
         setupStatusBar()
+        
+        // 3.5 首次启动引导
+        showOnboardingIfNeeded()
         
         // 4. 面板预热：两个面板是「预创建 + 只做 Show/Hide」，
         //    创建一次实测约 420ms（对话面板 361ms + 翻译面板 62ms），之后唤出只要几毫秒。
@@ -85,6 +90,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let chatItem = NSMenuItem(title: "打开对话", action: #selector(openChat), keyEquivalent: "")
             menu.addItem(chatItem)
             
+            let settingsItem = NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ",")
+            menu.addItem(settingsItem)
+            
             menu.addItem(NSMenuItem.separator())
             
             let launchItem = NSMenuItem(title: "开机自启动", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
@@ -97,8 +105,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             statusItem?.button?.performClick(nil)
             statusItem?.menu = nil
         } else {
-            // 左键点击 → 打开设置
-            openSettings()
+            // 左键 → 打开对话（最高频动作）；设置收进右键菜单
+            ChatPanelController.shared.toggleChat()
+        }
+    }
+    
+    /// 首次启动：在状态栏旁弹一个引导卡片，只出现一次
+    private func showOnboardingIfNeeded() {
+        guard !UserDefaults.standard.bool(forKey: "onboarding_shown") else { return }
+        UserDefaults.standard.set(true, forKey: "onboarding_shown")
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self, let button = self.statusItem?.button else { return }
+            
+            let popover = NSPopover()
+            popover.behavior = .transient
+            popover.contentViewController = NSHostingController(
+                rootView: OnboardingView(
+                    onOpenSettings: { [weak self] in
+                        self?.onboardingPopover?.close()
+                        self?.openSettings()
+                    },
+                    onDismiss: { [weak self] in
+                        self?.onboardingPopover?.close()
+                    }
+                )
+            )
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            self.onboardingPopover = popover
         }
     }
     
@@ -156,3 +190,4 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
     }
 }
+

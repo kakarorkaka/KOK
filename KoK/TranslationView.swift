@@ -19,6 +19,7 @@ struct TranslationView: View {
     
     var onHeightChange: ((CGFloat) -> Void)?
     var onReplace: (() -> Void)?
+    var onFollowUp: (() -> Void)?
     var onDismiss: (() -> Void)?
     
     @State private var dragOffset: CGPoint? = nil
@@ -32,22 +33,47 @@ struct TranslationView: View {
                     .foregroundColor(.blue)
                 
                 Menu {
-                    ForEach(viewModel.availableEngines) { engine in
-                        Button(action: {
-                            viewModel.selectEngine(id: engine.id)
-                        }) {
+                    EngineMenuContent(
+                        groups: viewModel.engineManager.engineGroups(chatOnly: false),
+                        selectedId: viewModel.engineManager.selectedEngineId
+                    ) { id in
+                        viewModel.selectEngine(id: id)
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(viewModel.selectedEngineName)
+                            .font(.system(size: 12))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 9))
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.primary.opacity(0.06))
+                    .cornerRadius(6)
+                }
+                .menuStyle(.borderlessButton)
+                
+                // 翻译方向：自动判断 / 手动指定，切换即重译
+                Menu {
+                    ForEach(TranslateDirection.allCases) { dir in
+                        Button(action: { viewModel.selectDirection(dir) }) {
                             HStack {
-                                Text(engine.name)
-                                if engine.id == viewModel.engineManager.selectedEngineId {
+                                Text(dir.title)
+                                if dir == viewModel.direction {
                                     Image(systemName: "checkmark")
                                 }
                             }
                         }
                     }
                 } label: {
-                    HStack(spacing: 4) {
-                        Text(viewModel.selectedEngineName)
+                    HStack(spacing: 3) {
+                        Image(systemName: "arrow.left.arrow.right")
+                            .font(.system(size: 9))
+                        Text(viewModel.direction.title)
                             .font(.system(size: 12))
+                            .lineLimit(1)
                         Image(systemName: "chevron.up.chevron.down")
                             .font(.system(size: 9))
                     }
@@ -166,6 +192,14 @@ struct TranslationView: View {
                     .buttonStyle(.plain)
                     .foregroundColor(viewModel.copyFeedback ? .green : .secondary)
                     .animation(.easeInOut(duration: 0.2), value: viewModel.copyFeedback)
+                    
+                    Button(action: { onFollowUp?() }) {
+                        Label("追问", systemImage: "bubble.left.and.bubble.right")
+                            .font(.system(size: 12))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.purple)
+                    .help("把原文和译文带进对话面板继续聊")
                     
                     Button(action: { onReplace?() }) {
                         Label("替换", systemImage: "arrow.triangle.2.circlepath")

@@ -443,6 +443,25 @@ class EngineManager: ObservableObject {
         return chatEngines.first
     }
     
+    /// 选择器里按服务商分节用
+    struct EngineGroup: Identifiable {
+        var id: String { providerName }
+        let providerName: String
+        let engines: [EngineConfig]
+    }
+    
+    /// 按服务商分组的引擎列表。chatOnly 为 true 时过滤掉不支持对话的（DeepL）
+    func engineGroups(chatOnly: Bool) -> [EngineGroup] {
+        providers.filter(\.isEnabled).compactMap { provider in
+            let list = provider.models
+                .filter { $0.isEnabled && (!chatOnly || provider.type.supportsChat) }
+                .map { engine(from: provider, model: $0) }
+            return list.isEmpty
+                ? nil
+                : EngineGroup(providerName: provider.name, engines: list)
+        }
+    }
+    
     private func engine(from provider: Provider, model: ProviderModel) -> EngineConfig {
         EngineConfig(
             id: model.id,

@@ -37,6 +37,14 @@ final class WindowManager: PanelController {
             self?.replaceSelection()
         }
         
+        contentView.onFollowUp = { [weak self] in
+            guard let self else { return }
+            ChatPanelController.shared.viewModel.followUp(
+                source: self.viewModel.sourceText,
+                translated: self.viewModel.translatedText
+            )
+        }
+        
         contentView.onDismiss = { [weak self] in
             self?.hideWindow()
         }

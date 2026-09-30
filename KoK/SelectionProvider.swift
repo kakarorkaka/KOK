@@ -22,6 +22,8 @@ enum SelectionProvider {
         var image: ImageAttachment?
         /// 文本被截断时置为 true，界面上要给用户提示
         var truncated = false
+        /// 上下文 chip 的自定义文案；nil 时显示「选中文本 N 字」
+        var label: String?
         
         var isEmpty: Bool { text == nil && image == nil }
     }

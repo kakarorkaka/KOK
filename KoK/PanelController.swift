@@ -10,7 +10,7 @@ import AppKit
 import SwiftUI
 
 @MainActor
-class PanelController: NSObject {
+class PanelController: NSObject, NSWindowDelegate {
     
     var panel: NSPanel?
     
@@ -26,6 +26,12 @@ class PanelController: NSObject {
     var minimumSize: NSSize { NSSize(width: 300, height: 100) }
     var maximumSize: NSSize { NSSize(width: 800, height: 800) }
     
+    /// 持久化用键名，子类覆盖避免互相覆盖
+    var persistenceKey: String { "panel" }
+    
+    /// 是否记住用户拖出来的大小（翻译面板宽度固定，只有对话面板需要）
+    var wantsSizePersistence: Bool { false }
+    
     /// Esc 键行为，默认直接隐藏
     var onEscape: (() -> Void)?
     
@@ -35,8 +41,13 @@ class PanelController: NSObject {
     // MARK: - 构建
     
     func makePanel() {
+        var initialSize = NSSize(width: preferredWidth, height: preferredHeight)
+        if wantsSizePersistence, let saved = Self.restoredSize(for: persistenceKey) {
+            initialSize = saved
+        }
+        
         let panel = FloatingPanel(
-            contentRect: NSRect(x: 0, y: 0, width: preferredWidth, height: preferredHeight),
+            contentRect: NSRect(origin: .zero, size: initialSize),
             styleMask: [.nonactivatingPanel, .borderless],
             backing: .buffered,
             defer: false
@@ -50,8 +61,27 @@ class PanelController: NSObject {
         panel.hidesOnDeactivate = false
         panel.minSize = minimumSize
         panel.maxSize = maximumSize
+        panel.delegate = self
         
         self.panel = panel
+    }
+    
+    // MARK: - 大小记忆
+    
+    private func saveSize() {
+        guard wantsSizePersistence, let panel else { return }
+        let size = panel.frame.size
+        UserDefaults.standard.set(
+            "\(Int(size.width.rounded())),\(Int(size.height.rounded()))",
+            forKey: "panel_size_\(persistenceKey)"
+        )
+    }
+    
+    private static func restoredSize(for key: String) -> NSSize? {
+        guard let raw = UserDefaults.standard.string(forKey: "panel_size_\(key)") else { return nil }
+        let parts = raw.split(separator: ",").compactMap { Int($0) }
+        guard parts.count == 2, parts[0] > 100, parts[1] > 100 else { return nil }
+        return NSSize(width: parts[0], height: parts[1])
     }
     
     func installContent<V: View>(_ view: V) {
@@ -101,6 +131,7 @@ class PanelController: NSObject {
     }
     
     func hideWindow() {
+        saveSize()
         panel?.orderOut(nil)
         stopMonitors()
     }
@@ -129,6 +160,10 @@ class PanelController: NSObject {
             }
             return nil
         }
+    }
+    
+    func windowDidResize(_ notification: Notification) {
+        saveSize()
     }
     
     func stopMonitors() {

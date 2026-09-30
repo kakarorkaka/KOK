@@ -55,8 +55,6 @@ final class ChatViewModel: ObservableObject {
     /// 送入模型的最大历史条数（约 10 轮）
     private let maxContextMessages = 20
     
-    var availableEngines: [EngineConfig] { engineManager.chatEngines }
-    
     var selectedEngineName: String {
         engineManager.selectedChatEngine?.name ?? "未选择"
     }
@@ -213,6 +211,15 @@ final class ChatViewModel: ObservableObject {
     
     func removeContext() {
         context = nil
+    }
+    
+    /// 从翻译面板追问：把原文 + 译文作为上下文带进来，用户接着打字即可
+    func followUp(source: String, translated: String) {
+        context = SelectionProvider.Capture(
+            text: "【原文】\n\(source)\n\n【译文】\n\(translated)",
+            label: "原文 + 译文"
+        )
+        onNeedsForeground?()
     }
     
     // MARK: - 截图

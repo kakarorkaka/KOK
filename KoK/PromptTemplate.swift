@@ -33,12 +33,10 @@ enum PromptTemplate {
     /// 兼容 `{{TARGET_LANG}}`、`{TARGET_LANG}`、`{{target_lang}}`、`{target_lang}`。
     /// 双括号必须排在单括号前面替换，否则 `{TARGET_LANG}` 会先把 `{{TARGET_LANG}}` 拆成
     /// 半个花括号加变量名，留下残余的 `{`。
-    static func fill(_ template: String, targetLang: String) -> String {
-        // App 判断出的翻译方向：中文原文 → 译成英文，其余 → 译成中文
-        let isChineseTarget = (targetLang == "ZH")
+    static func fill(_ template: String, targetLanguage: String, sourceLanguage: String) -> String {
         let values: [Variable: String] = [
-            .targetLang: isChineseTarget ? "Simplified Chinese" : "English",
-            .sourceLang: isChineseTarget ? "English" : "Simplified Chinese",
+            .targetLang: targetLanguage,
+            .sourceLang: sourceLanguage,
         ]
         
         var result = template

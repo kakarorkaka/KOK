@@ -93,6 +93,37 @@ class HotKeyManager: ObservableObject {
         private func normalized(_ flags: NSEvent.ModifierFlags) -> NSEvent.ModifierFlags {
             flags.intersection(.deviceIndependentFlagsMask)
         }
+        
+        /// 给人看的写法，如 ⌘1、⌥V。设置页与首次引导共用。
+        var displayString: String {
+            var result = ""
+            let flags = normalized(modifiers)
+            if flags.contains(.control) { result += "⌃" }
+            if flags.contains(.option) { result += "⌥" }
+            if flags.contains(.shift) { result += "⇧" }
+            if flags.contains(.command) { result += "⌘" }
+            result += Self.keyName(for: key)
+            return result
+        }
+        
+        static func keyName(for key: Key) -> String {
+            let mapping: [Key: String] = [
+                .a: "A", .b: "B", .c: "C", .d: "D", .e: "E", .f: "F",
+                .g: "G", .h: "H", .i: "I", .j: "J", .k: "K", .l: "L",
+                .m: "M", .n: "N", .o: "O", .p: "P", .q: "Q", .r: "R",
+                .s: "S", .t: "T", .u: "U", .v: "V", .w: "W", .x: "X",
+                .y: "Y", .z: "Z",
+                .zero: "0", .one: "1", .two: "2", .three: "3", .four: "4",
+                .five: "5", .six: "6", .seven: "7", .eight: "8", .nine: "9",
+                .space: "Space", .return: "Return", .tab: "Tab", .escape: "Esc",
+                .delete: "Delete", .forwardDelete: "Fwd Del",
+                .upArrow: "↑", .downArrow: "↓", .leftArrow: "←", .rightArrow: "→",
+                .f1: "F1", .f2: "F2", .f3: "F3", .f4: "F4", .f5: "F5",
+                .f6: "F6", .f7: "F7", .f8: "F8", .f9: "F9", .f10: "F10",
+                .f11: "F11", .f12: "F12",
+            ]
+            return mapping[key] ?? String(describing: key).uppercased()
+        }
     }
     
     private init() {

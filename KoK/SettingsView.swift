@@ -150,7 +150,7 @@ struct ShortcutRecorder: View {
         guard let shortcut = manager.shortcut(for: action) else {
             return "未设置"
         }
-        return "\(modifiersString(shortcut.modifiers))\(keyName(for: shortcut.key))"
+        return shortcut.displayString
     }
     
     var body: some View {
@@ -211,34 +211,6 @@ struct ShortcutRecorder: View {
     func startRecording() {
         isRecording = true
         manager.pause()
-    }
-    
-    func modifiersString(_ modifiers: NSEvent.ModifierFlags) -> String {
-        var result = ""
-        if modifiers.contains(.control) { result += "⌃" }
-        if modifiers.contains(.option) { result += "⌥" }
-        if modifiers.contains(.shift) { result += "⇧" }
-        if modifiers.contains(.command) { result += "⌘" }
-        return result
-    }
-    
-    func keyName(for key: Key) -> String {
-        let mapping: [Key: String] = [
-            .a: "A", .b: "B", .c: "C", .d: "D", .e: "E", .f: "F",
-            .g: "G", .h: "H", .i: "I", .j: "J", .k: "K", .l: "L",
-            .m: "M", .n: "N", .o: "O", .p: "P", .q: "Q", .r: "R",
-            .s: "S", .t: "T", .u: "U", .v: "V", .w: "W", .x: "X",
-            .y: "Y", .z: "Z",
-            .zero: "0", .one: "1", .two: "2", .three: "3", .four: "4",
-            .five: "5", .six: "6", .seven: "7", .eight: "8", .nine: "9",
-            .space: "Space", .return: "Return", .tab: "Tab", .escape: "Esc",
-            .delete: "Delete", .forwardDelete: "Fwd Del",
-            .upArrow: "↑", .downArrow: "↓", .leftArrow: "←", .rightArrow: "→",
-            .f1: "F1", .f2: "F2", .f3: "F3", .f4: "F4", .f5: "F5",
-            .f6: "F6", .f7: "F7", .f8: "F8", .f9: "F9", .f10: "F10",
-            .f11: "F11", .f12: "F12",
-        ]
-        return mapping[key] ?? String(describing: key).uppercased()
     }
 }
 

@@ -15,6 +15,8 @@ final class ChatPanelController: PanelController {
     let viewModel = ChatViewModel()
     
     override var preferredWidth: CGFloat { 460 }
+    override var persistenceKey: String { "chat" }
+    override var wantsSizePersistence: Bool { true }
     override var preferredHeight: CGFloat { 420 }
     override var minimumSize: NSSize { NSSize(width: 360, height: 240) }
     override var maximumSize: NSSize { NSSize(width: 1000, height: 1000) }

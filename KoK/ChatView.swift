@@ -56,21 +56,11 @@ struct ChatView: View {
                 .foregroundColor(.purple)
             
             Menu {
-                if viewModel.availableEngines.isEmpty {
-                    Text("没有支持对话的引擎")
-                } else {
-                    ForEach(viewModel.availableEngines) { engine in
-                        Button {
-                            viewModel.selectEngine(id: engine.id)
-                        } label: {
-                            HStack {
-                                Text(engine.name)
-                                if engine.id == viewModel.engineManager.selectedChatEngine?.id {
-                                    Image(systemName: "checkmark")
-                                }
-                            }
-                        }
-                    }
+                EngineMenuContent(
+                    groups: viewModel.engineManager.engineGroups(chatOnly: true),
+                    selectedId: viewModel.engineManager.selectedChatEngine?.id
+                ) { id in
+                    viewModel.selectEngine(id: id)
                 }
             } label: {
                 HStack(spacing: 4) {
@@ -293,7 +283,7 @@ struct ChatView: View {
                     if let text = context.text {
                         contextChip(
                             icon: "doc.text",
-                            text: "选中文本 \(text.count) 字\(context.truncated ? "（已截断）" : "")"
+                            text: context.label ?? "选中文本 \(text.count) 字\(context.truncated ? "（已截断）" : "")"
                         )
                     }
                     

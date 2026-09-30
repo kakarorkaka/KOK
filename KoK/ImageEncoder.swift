@@ -29,6 +29,38 @@ struct ImageAttachment: Equatable {
     var dimensionText: String { "\(width)×\(height)" }
 }
 
+/// 预览 / 导出时用得上的派生形式
+extension ImageAttachment {
+    
+    /// 界面预览用（base64 → NSImage）。只在视图 onAppear 里调一次，避免重复解码。
+    var previewImage: NSImage? {
+        guard let data = Data(base64Encoded: base64) else { return nil }
+        return NSImage(data: data)
+    }
+    
+    /// 原始编码数据（另存为 / 写临时文件用）
+    var rawData: Data? { Data(base64Encoded: base64) }
+    
+    /// 按 mimeType 推断的文件扩展名
+    var fileExtension: String {
+        switch mimeType {
+        case "image/png": return "png"
+        case "image/heic": return "heic"
+        case "image/gif": return "gif"
+        default: return "jpg"
+        }
+    }
+    
+    /// 转成 PNG（复制到剪贴板用，兼容性最好）
+    var pngData: Data? {
+        guard let image = previewImage,
+              let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff)
+        else { return nil }
+        return rep.representation(using: .png, properties: [:])
+    }
+}
+
 enum ImageEncoder {
     static let maxDimension: CGFloat = 1024
     static let jpegQuality: CGFloat = 0.8

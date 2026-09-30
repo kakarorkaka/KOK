@@ -56,6 +56,16 @@ final class ChatPanelController: PanelController {
             // 只做与翻译面板的互斥，焦点统一由 openChat / 语音流程处理
             WindowManager.shared.hideWindow()
         }
+        
+        // Esc：先关图片预览，没有预览才收面板
+        onEscape = { [weak self] in
+            guard let self else { return }
+            if self.viewModel.previewImage != nil {
+                self.viewModel.closePreview()
+            } else {
+                self.hideWindow()
+            }
+        }
     }
     
     // MARK: - 打开（点按 / 左键 / 菜单）

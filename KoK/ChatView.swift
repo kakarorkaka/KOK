@@ -47,6 +47,11 @@ struct ChatView: View {
         .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
         .onAppear { focusInput() }
         .onChange(of: viewModel.focusRequest) { _, _ in focusInput() }
+        .overlay {
+            if let image = viewModel.previewImage {
+                ImagePreviewOverlay(image: image) { viewModel.closePreview() }
+            }
+        }
     }
     
     // MARK: - 工具栏
@@ -154,7 +159,8 @@ struct ChatView: View {
                             message: message,
                             isStreaming: viewModel.isStreaming,
                             isGeneratingImage: viewModel.isGeneratingImage,
-                            onCopy: { viewModel.copy($0) }
+                            onCopy: { viewModel.copy($0) },
+                            onPreview: { viewModel.preview($0) }
                         )
                     }
                     
@@ -323,7 +329,19 @@ struct ChatView: View {
             if let context = viewModel.context {
                 HStack(spacing: 6) {
                     if let image = context.image {
-                        contextChip(icon: "photo", text: "图片 \(image.dimensionText) · \(image.sizeText)")
+                        Button { viewModel.preview(image) } label: {
+                            HStack(spacing: 6) {
+                                AttachmentThumbnail(image: image, maxSide: 34)
+                                Text("图片 \(image.dimensionText) · \(image.sizeText)")
+                                    .font(.system(size: 11))
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 4)
+                            .background(Color.primary.opacity(0.08))
+                            .cornerRadius(6)
+                        }
+                        .buttonStyle(.plain)
+                        .help("点击预览这张图片")
                     }
                     if let text = context.text {
                         contextChip(
@@ -387,6 +405,7 @@ struct MessageRow: View {
     let isStreaming: Bool
     let isGeneratingImage: Bool
     let onCopy: (String) -> Void
+    let onPreview: (ImageAttachment) -> Void
     
     var body: some View {
         switch message.role {
@@ -394,18 +413,29 @@ struct MessageRow: View {
             HStack {
                 Spacer(minLength: 40)
                 VStack(alignment: .trailing, spacing: 4) {
-                if message.hasImage {
-                    Label("含图片", systemImage: "photo")
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
+                let attachments = message.parts.compactMap { part -> ImageAttachment? in
+                    if case .image(let image) = part { return image }
+                    return nil
                 }
-                Text(message.content)
-                    .font(.system(size: 13))
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(Color.accentColor.opacity(0.16))
-                    .cornerRadius(10)
+                ForEach(Array(attachments.enumerated()), id: \.offset) { _, attachment in
+                    VStack(alignment: .trailing, spacing: 3) {
+                        AttachmentThumbnail(image: attachment, maxSide: 190) {
+                            onPreview(attachment)
+                        }
+                        Text("参考图 \(attachment.dimensionText) · \(attachment.sizeText)")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                if !message.content.isEmpty {
+                    Text(message.content)
+                        .font(.system(size: 13))
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(Color.accentColor.opacity(0.16))
+                        .cornerRadius(10)
+                }
                 }
             }
             
@@ -573,6 +603,161 @@ struct CodeBlock: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(Color.primary.opacity(0.08), lineWidth: 1)
         )
+    }
+}
+
+// MARK: - 附件缩略图 + 预览
+
+/// 上下文里那张图的小缩略图。onTap 为 nil 时不可点（嵌在别的可点区域里时用）。
+struct AttachmentThumbnail: View {
+    let image: ImageAttachment
+    var maxSide: CGFloat = 160
+    var onTap: (() -> Void)?
+    
+    @State private var nsImage: NSImage?
+    
+    var body: some View {
+        Group {
+            if let onTap {
+                base
+                    .onTapGesture { onTap() }
+                    .help("点击预览这张图片")
+            } else {
+                base
+            }
+        }
+        .onAppear { if nsImage == nil { nsImage = image.previewImage } }
+    }
+    
+    private var base: some View {
+        Group {
+            if let nsImage {
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.primary.opacity(0.06))
+                    .overlay(
+                        Image(systemName: "photo")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                    )
+            }
+        }
+        .frame(maxWidth: maxSide, maxHeight: maxSide)
+        .cornerRadius(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.primary.opacity(0.14), lineWidth: 1)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+/// 附件大图预览：盖在面板上，点背景 / Esc / 关闭按钮退出。
+/// 面板本身拿不到系统的 Quick Look，这里自己实现一个够用的版本。
+struct ImagePreviewOverlay: View {
+    let image: ImageAttachment
+    let onClose: () -> Void
+    
+    @State private var nsImage: NSImage?
+    
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.45)
+                .contentShape(Rectangle())
+                .onTapGesture { onClose() }
+            
+            VStack(spacing: 10) {
+                Group {
+                    if let nsImage {
+                        Image(nsImage: nsImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                    } else {
+                        ProgressView().scaleEffect(0.6)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                
+                HStack(spacing: 12) {
+                    Text("\(image.dimensionText) · \(image.sizeText)")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    
+                    Spacer(minLength: 0)
+                    
+                    Button { copyImage() } label: {
+                        Label("复制", systemImage: "doc.on.doc").font(.system(size: 11))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.secondary)
+                    .help("复制到剪贴板")
+                    
+                    Button { saveImage() } label: {
+                        Label("保存", systemImage: "square.and.arrow.down").font(.system(size: 11))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.secondary)
+                    .help("另存为…")
+                    
+                    Button { openImage() } label: {
+                        Label("打开", systemImage: "arrow.up.forward.app").font(.system(size: 11))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.secondary)
+                    .help("用默认应用打开")
+                    
+                    Button { onClose() } label: {
+                        Label("关闭", systemImage: "xmark").font(.system(size: 11))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.secondary)
+                    .help("关闭预览 (Esc)")
+                }
+            }
+            .padding(12)
+            .background(.ultraThinMaterial)
+            .cornerRadius(12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.25), radius: 16, y: 6)
+            .padding(18)
+        }
+        .onAppear { nsImage = image.previewImage }
+    }
+    
+    private func copyImage() {
+        guard let data = image.pngData ?? image.rawData else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setData(data, forType: .png)
+    }
+    
+    private func saveImage() {
+        guard let data = image.rawData else { return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "kok-附件-\(Int(Date().timeIntervalSince1970)).\(image.fileExtension)"
+        let ext = image.fileExtension
+        if let type = UTType(filenameExtension: ext) {
+            panel.allowedContentTypes = [type]
+        }
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            try? data.write(to: url)
+        }
+    }
+    
+    /// 写一份到临时目录再用默认应用打开——附件只在内存里，没有现成文件路径
+    private func openImage() {
+        guard let data = image.rawData else { return }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kok-attachment-\(UUID().uuidString).\(image.fileExtension)")
+        guard (try? data.write(to: url)) != nil else { return }
+        NSWorkspace.shared.open(url)
     }
 }
 

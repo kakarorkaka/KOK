@@ -88,6 +88,8 @@ final class ChatViewModel: ObservableObject {
     @Published var imageSize: ImageGenSize = .auto
     /// 语音相关错误（权限、没听清等）
     @Published var voiceError: String?
+    /// 正在预览的附件图（点缩略图打开；Esc / 点背景 / 关闭按钮退出）
+    @Published var previewImage: ImageAttachment?
     
     let voice = VoiceInputService()
     private var voiceTimeoutTask: Task<Void, Never>?
@@ -296,6 +298,16 @@ final class ChatViewModel: ObservableObject {
     
     func removeContext() {
         context = nil
+    }
+    
+    // MARK: - 附件预览
+    
+    func preview(_ image: ImageAttachment) {
+        previewImage = image
+    }
+    
+    func closePreview() {
+        previewImage = nil
     }
     
     /// 取消当前录音（点按误判、用户改主意等），不留任何痕迹

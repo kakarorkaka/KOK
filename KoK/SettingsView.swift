@@ -42,6 +42,7 @@ struct GeneralSettingsTab: View {
     }()
     
     @State private var voiceAuthorized = false
+    @State private var screenRecordingAuthorized = false
     
     var body: some View {
         Form {
@@ -54,7 +55,7 @@ struct GeneralSettingsTab: View {
             } header: {
                 Text("快捷键")
             } footer: {
-                Text("翻译读取选中文字，对话开输入框，语音按住说话。没反应时点「测试」检查是否被别的 App 占用。")
+                Text("翻译读取选中文字，对话开输入框，语音按住说话，截图框选屏幕。没反应时点「测试」。")
             }
             
             Section {
@@ -65,19 +66,21 @@ struct GeneralSettingsTab: View {
                 }
                 
                 if !voiceAuthorized {
-                    HStack(spacing: 8) {
-                        Label("需要麦克风与语音识别权限", systemImage: "exclamationmark.triangle.fill")
-                            .font(.caption)
-                            .foregroundColor(.orange)
-                        Spacer()
-                        Button("去授权") { requestVoicePermission() }
-                            .controlSize(.small)
+                    permissionRow("需要麦克风与语音识别权限") {
+                        requestVoicePermission()
+                    }
+                }
+                
+                if !screenRecordingAuthorized {
+                    permissionRow("需要屏幕录制权限（截图用）") {
+                        ScreenshotCapture.requestPermission()
+                        refreshPermissions()
                     }
                 }
             } header: {
-                Text("语音")
+                Text("语音与截图")
             } footer: {
-                Text("识别在本机完成，录音不出设备。首次使用时系统会弹权限询问。")
+                Text("语音识别在本机完成，录音不出设备。")
             }
             
             Section {
@@ -99,17 +102,30 @@ struct GeneralSettingsTab: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear { refreshVoicePermission() }
+        .onAppear { refreshPermissions() }
     }
     
-    private func refreshVoicePermission() {
+    @ViewBuilder
+    private func permissionRow(_ title: String, request: @escaping () -> Void) -> some View {
+        HStack(spacing: 8) {
+            Label(title, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundColor(.orange)
+            Spacer()
+            Button("去授权", action: request)
+                .controlSize(.small)
+        }
+    }
+    
+    private func refreshPermissions() {
         voiceAuthorized = VoiceInputService.microphoneAuthorized && VoiceInputService.speechAuthorized
+        screenRecordingAuthorized = ScreenshotCapture.hasPermission
     }
     
     private func requestVoicePermission() {
         Task {
             _ = await VoiceInputService.requestPermissions()
-            refreshVoicePermission()
+            refreshPermissions()
         }
     }
 }

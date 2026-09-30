@@ -33,8 +33,10 @@ final class ChatPanelController: PanelController {
         }
         installContent(contentView)
         
-        viewModel.onVoiceReadyToSend = { [weak self] in
-            self?.activatePanel()
+        viewModel.onNeedsForeground = { [weak self] in
+            // 抓取阶段结束后再显示并激活面板：
+            // 显示早了会被截进图里，激活早了会抢走原 App 的焦点
+            self?.showWindow(activate: true)
         }
         
         onWillShow = {
@@ -69,9 +71,8 @@ final class ChatPanelController: PanelController {
         viewModel.endVoiceAndSend()
     }
     
-    /// 把面板提到前台（只在选中内容已经抓完之后调用）
-    private func activatePanel() {
-        panel?.makeKeyAndOrderFront(nil)
-        NSApp.activate()
+    /// 框选屏幕区域作为上下文。截图期间不显示面板，免得被截进去。
+    func captureScreenshot() {
+        viewModel.captureScreenshot()
     }
 }

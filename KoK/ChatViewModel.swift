@@ -33,10 +33,10 @@ final class ChatViewModel: ObservableObject {
     /// 本次录音是否需要抓取选中内容
     private var wantsSelection = false
     
-    /// 语音即将发送时的回调。
-    /// 语音弹出时是「不激活 App」的（否则抓不到原 App 的选中内容），
-    /// 到这里选中内容已经抓完，把面板提到前台就不会再有副作用了。
-    var onVoiceReadyToSend: (() -> Void)?
+    /// 「把面板提到前台」的回调。
+    /// 语音与截图都会先以不抢焦点的方式工作（否则抓不到原 App 的选中内容），
+    /// 拿到结果后再统一交给控制器把面板显示出来。
+    var onNeedsForeground: (() -> Void)?
     private var cancellables = Set<AnyCancellable>()
     
     init() {
@@ -191,7 +191,7 @@ final class ChatViewModel: ObservableObject {
             let spoken = await self.voice.finish()
             
             // 抓取已完成，现在可以安全地把面板提到前台
-            self.onVoiceReadyToSend?()
+            self.onNeedsForeground?()
             
             if let captured, !captured.isEmpty {
                 self.context = captured
@@ -213,6 +213,29 @@ final class ChatViewModel: ObservableObject {
     
     func removeContext() {
         context = nil
+    }
+    
+    // MARK: - 截图
+    
+    /// 框选屏幕区域，作为上下文。之后可以打字或按住 ⌥V 说话再一起发出。
+    func captureScreenshot() {
+        voiceError = nil
+        errorMessage = nil
+        
+        Task { [weak self] in
+            guard let self else { return }
+            
+            do {
+                let image = try await ScreenshotCapture.captureInteractive()
+                self.context = SelectionProvider.Capture(text: nil, image: image)
+            } catch ScreenshotCapture.CaptureError.cancelled {
+                return   // 用户按 Esc 取消，不打扰
+            } catch {
+                self.voiceError = error.localizedDescription
+            }
+            
+            self.onNeedsForeground?()
+        }
     }
     
     func regenerate() {

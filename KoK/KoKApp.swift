@@ -44,6 +44,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         HotKeyManager.shared.releaseHandlers[.voice] = {
             ChatPanelController.shared.endVoice()
         }
+        HotKeyManager.shared.handlers[.screenshot] = {
+            ChatPanelController.shared.captureScreenshot()
+        }
         
         // 3. 初始化状态栏
         setupStatusBar()

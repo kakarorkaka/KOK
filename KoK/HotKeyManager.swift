@@ -18,6 +18,8 @@ enum HotKeyAction: String, CaseIterable, Identifiable {
     case chat
     /// 按住说话：按下开始录音、松开结束并发送
     case voice
+    /// 框选屏幕区域作为上下文
+    case screenshot
     
     var id: String { rawValue }
     
@@ -26,6 +28,7 @@ enum HotKeyAction: String, CaseIterable, Identifiable {
         case .translate: return "翻译"
         case .chat: return "对话"
         case .voice: return "语音"
+        case .screenshot: return "截图"
         }
     }
     
@@ -33,6 +36,7 @@ enum HotKeyAction: String, CaseIterable, Identifiable {
     var hint: String? {
         switch self {
         case .voice: return "按住说话，松开后连同选中内容一起发送"
+        case .screenshot: return "框选屏幕区域，作为上下文"
         default: return nil
         }
     }
@@ -47,6 +51,8 @@ enum HotKeyAction: String, CaseIterable, Identifiable {
         case .translate: return (.d, [.option])
         case .chat: return (.one, [.command])
         case .voice: return (.v, [.option])
+        // ⌥S / ⌥A 都被 iShot 占了（区域截图 / 快速截图）
+        case .screenshot: return (.c, [.option])
         }
     }
 }

@@ -246,11 +246,14 @@ struct ChatView: View {
                         emptyHint
                     }
                     
-                    ForEach(visibleMessages) { message in
+                    ForEach(Array(visibleMessages.enumerated()), id: \.element.id) { index, message in
                         MessageRow(
                             message: message,
                             isStreaming: viewModel.isStreaming,
                             isGeneratingImage: viewModel.isGeneratingImage,
+                            // 只有最后一条才显示「正在生成图片」：文字已经流完了，
+                            // 不提示的话用户会以为这句话就到此为止
+                            isImagePending: viewModel.isGeneratingImage && index == visibleMessages.count - 1,
                             onCopy: { viewModel.copy($0) },
                             onPreview: { viewModel.preview($0) },
                             onReplace: { viewModel.replaceSelection() }
@@ -505,6 +508,8 @@ struct MessageRow: View {
     let message: ChatMessage
     let isStreaming: Bool
     let isGeneratingImage: Bool
+    /// 这条消息下面正在出图（文字已经流完，但图还没回来）
+    let isImagePending: Bool
     let onCopy: (String) -> Void
     let onPreview: (ImageAttachment) -> Void
     let onReplace: () -> Void
@@ -655,6 +660,16 @@ struct MessageRow: View {
                     }
                     ForEach(Array(images.enumerated()), id: \.element.fileURL) { _, image in
                         GeneratedImageView(image: image)
+                    }
+                    
+                    // 文字已经流完、图还在路上：明确告诉用户还在生成
+                    if isImagePending && !message.hasGeneratedImage {
+                        HStack(spacing: 6) {
+                            ProgressView().scaleEffect(0.5)
+                            Text("正在生成图片…（约 10–20 秒）")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
             }

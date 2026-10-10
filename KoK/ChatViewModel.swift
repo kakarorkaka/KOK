@@ -153,6 +153,9 @@ final class ChatViewModel: ObservableObject {
     
     private let translationService = UnifiedTranslationService()
     private var transformTask: Task<Void, Never>?
+    /// 正在流式输出、还没出结果的那张变换卡片。
+    /// 换动作 / 停止时要把这张卡收尾，否则会留一张永远「正在处理…」的僵尸卡片。
+    private var runningTransformCardId: UUID?
     /// 最近一次抓取时的来源 App（「替换」时切回它再粘贴）
     private var lastSourceApp: NSRunningApplication?
     private let historyKey = "translation_history"
@@ -249,6 +252,12 @@ final class ChatViewModel: ObservableObject {
             return
         }
         
+        // 上一张还没出结果：直接撤掉，别留一张转圈的僵尸卡片
+        discardRunningTransformCard()
+        // 正在流式输出的对话也让位：用户已经切去用动作处理了
+        streamTask?.cancel()
+        streamTask = nil
+        
         errorMessage = nil
         voiceError = nil
         activeAction = action
@@ -261,6 +270,7 @@ final class ChatViewModel: ObservableObject {
         card.transformActionId = action.rawValue
         messages.append(card)
         let cardId = card.id
+        runningTransformCardId = cardId
         
         isStreaming = true
         streamFinished = false
@@ -314,14 +324,35 @@ final class ChatViewModel: ObservableObject {
                         engine: config.name
                     )
                 }
+                self.runningTransformCardId = nil
             } catch {
                 guard self.activeStreamId == streamId else { return }
                 self.isStreaming = false
+                self.runningTransformCardId = nil
                 if !Task.isCancelled {
                     self.errorMessage = "\(action.title)失败：\(error.localizedDescription)"
                 }
             }
         }
+    }
+    
+    /// 撤掉正在跑但还没出结果的那张卡片（连带它前面那条隐藏的原文消息）
+    private func discardRunningTransformCard() {
+        transformTask?.cancel()
+        transformTask = nil
+        
+        guard let id = runningTransformCardId,
+              let index = messages.firstIndex(where: { $0.id == id })
+        else {
+            runningTransformCardId = nil
+            return
+        }
+        
+        messages.remove(at: index)
+        if index > 0, messages[index - 1].hidden {
+            messages.remove(at: index - 1)
+        }
+        runningTransformCardId = nil
     }
     
     private func content(of id: UUID) -> String {
@@ -694,10 +725,9 @@ final class ChatViewModel: ObservableObject {
     }
     
     func stop() {
+        discardRunningTransformCard()
         streamTask?.cancel()
         streamTask = nil
-        transformTask?.cancel()
-        transformTask = nil
         imageGenTask?.cancel()
         imageGenTask = nil
         pendingGenerated = nil

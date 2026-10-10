@@ -23,9 +23,14 @@ final class ChatPanelController: PanelController {
     override var preferredWidth: CGFloat { 460 }
     override var persistenceKey: String { "chat" }
     override var wantsSizePersistence: Bool { true }
-    override var preferredHeight: CGFloat { 300 }
-    override var minimumSize: NSSize { NSSize(width: 360, height: 180) }
+    override var preferredHeight: CGFloat { 420 }
+    override var minimumSize: NSSize { NSSize(width: 360, height: 260) }
     override var maximumSize: NSSize { NSSize(width: 1000, height: 1000) }
+    
+    /// 自适应高度的下限：再紧凑也要留出「一张卡片 + 输入栏」的余量
+    private static let minAutoHeight: CGFloat = 260
+    /// 内容高度还没测出来时的开场高度
+    private static let defaultHeight: CGFloat = 420
     
     /// 点按与按住的分界。快速点按通常 50–150ms，刻意按住一般超过 250ms。
     private static let holdThreshold: TimeInterval = 0.18
@@ -49,6 +54,7 @@ final class ChatPanelController: PanelController {
         if let stored = UserDefaults.standard.object(forKey: Self.heightLimitKey) as? Double {
             heightLimit = CGFloat(stored)
         }
+        heightLimit = max(heightLimit, Self.minAutoHeight)
         setupPanel()
     }
     
@@ -171,7 +177,7 @@ final class ChatPanelController: PanelController {
     
     private func resizeToFit(contentHeight: CGFloat, animate: Bool) {
         guard let panel else { return }
-        let target = min(max(contentHeight.rounded(), minimumSize.height), heightLimit)
+        let target = max(Self.minAutoHeight, min(contentHeight.rounded(), heightLimit))
         guard abs(panel.frame.height - target) > 2 else { return }
         
         var frame = panel.frame
@@ -191,10 +197,14 @@ final class ChatPanelController: PanelController {
     }
     
     override func showWindow(activate: Bool = true, makeKey: Bool = true) {
-        // 显示前先按上次的内容高度摆好，避免先大后小的跳动
-        if let lastContentHeight, let panel {
+        // 显示前先摆好高度：有测量值就按内容，没有就给一个舒服的默认高度，
+        // 避免「先开得很矮、内容出来再长高」的跳动
+        if let panel {
+            let target = max(
+                Self.minAutoHeight,
+                min(lastContentHeight ?? Self.defaultHeight, heightLimit)
+            )
             var frame = panel.frame
-            let target = min(max(lastContentHeight.rounded(), minimumSize.height), heightLimit)
             frame.size.height = target
             frame.origin.y = frame.maxY - target
             lastAppliedHeight = target
@@ -211,7 +221,7 @@ final class ChatPanelController: PanelController {
             super.windowDidResize(notification)
             return
         }
-        heightLimit = max(height, minimumSize.height)
+        heightLimit = max(height, Self.minAutoHeight)
         UserDefaults.standard.set(Double(heightLimit), forKey: Self.heightLimitKey)
         super.windowDidResize(notification)
     }

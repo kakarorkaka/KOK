@@ -19,8 +19,13 @@ struct ChatView: View {
     @FocusState private var inputFocused: Bool
     @State private var dragOffset: CGPoint?
     @State private var showingHistory = false
-    /// 用户是否停在底部：不在底部时不要把他拽回去（流式输出期间尤其重要）
+    /// 是否停在底部（仅供用户滑动时判定）
     @State private var isAtBottom = true
+    /// 是否跟随最新内容：只有用户主动往上滑才会关掉，
+    /// 这样出图 / 流式追加这类「内容增长」不会让新结果落在视野外
+    @State private var followTail = true
+    /// 用户是否正在自己滑动
+    @State private var userScrolling = false
     @State private var lastMessageCount = 0
     
     private let bottomAnchor = "chat-bottom"
@@ -93,7 +98,7 @@ struct ChatView: View {
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(IconButtonStyle())
             .disabled(viewModel.history.isEmpty)
             .help(viewModel.history.isEmpty ? "暂无翻译历史" : "翻译历史")
             .popover(isPresented: $showingHistory) {
@@ -108,7 +113,7 @@ struct ChatView: View {
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(IconButtonStyle())
             .help("新对话")
             .disabled(viewModel.messages.isEmpty)
             
@@ -117,7 +122,7 @@ struct ChatView: View {
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundColor(.secondary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(IconButtonStyle())
             .help("关闭 (Esc)")
         }
         .padding(12)
@@ -267,18 +272,29 @@ struct ChatView: View {
                 .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .onScrollPhaseChange { _, phase in
+                // 只有「用户自己在滑」时才重新判定要不要跟随，
+                // 程序滚动 / 内容增长引起的几何变化不算（否则流式输出会把跟随关掉）
+                switch phase {
+                case .tracking, .interacting, .decelerating:
+                    userScrolling = true
+                default:
+                    userScrolling = false
+                }
+            }
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 // 距底部 40pt 以内算「贴着底」
                 geometry.contentSize.height - geometry.contentOffset.y - geometry.containerSize.height < 40
             } action: { _, atBottom in
                 isAtBottom = atBottom
+                if userScrolling { followTail = atBottom }
             }
             .onChange(of: viewModel.messages) { _, newValue in
-                // 新消息一律跟到底；流式追加时只在用户本来就贴底的情况下跟随，
-                // 免得用户往上翻看历史时被一次次拽回来
                 let isNewMessage = newValue.count != lastMessageCount
                 lastMessageCount = newValue.count
-                guard isAtBottom || isNewMessage else { return }
+                // 用户自己发了新消息：无论之前在哪，都跟到底
+                if isNewMessage, newValue.last?.role == .user { followTail = true }
+                guard followTail else { return }
                 withAnimation(.easeOut(duration: 0.12)) {
                     proxy.scrollTo(bottomAnchor, anchor: .bottom)
                 }
@@ -334,7 +350,7 @@ struct ChatView: View {
             Button { viewModel.retry() } label: {
                 Text("重试").font(.caption)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(IconButtonStyle())
             .foregroundColor(.blue)
         }
         .foregroundColor(.red)
@@ -365,7 +381,7 @@ struct ChatView: View {
                     .font(.system(size: 17))
                     .foregroundColor(viewModel.isImageMode ? .accentColor : .secondary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(IconButtonStyle())
             .help(viewModel.isImageMode ? "退出生图模式" : "生图模式：输入当提示词，图片上下文当参考图")
             
             if viewModel.isImageMode {
@@ -427,7 +443,7 @@ struct ChatView: View {
                     .font(.system(size: 17))
                     .foregroundColor(viewModel.isListening ? .red : .secondary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(IconButtonStyle())
             .help(viewModel.isListening ? "结束并发送" : "语音输入")
             
             Button {
@@ -441,7 +457,7 @@ struct ChatView: View {
                     .font(.system(size: 20))
                     .foregroundColor(isBusy ? .secondary : (viewModel.canSend ? .accentColor : Color.secondary.opacity(0.4)))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(IconButtonStyle())
             .disabled(!isBusy && !viewModel.canSend)
             .help(isBusy ? "停止生成" : (viewModel.isImageMode ? "生成图片 (↵)" : "发送 (↵)"))
         }
@@ -486,7 +502,7 @@ struct ChatView: View {
                             .background(Color.primary.opacity(0.08))
                             .cornerRadius(6)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(IconButtonStyle())
                         .help("点击预览这张图片")
                     }
                     if let text = context.text {
@@ -503,7 +519,7 @@ struct ChatView: View {
                             .font(.system(size: 12))
                             .foregroundColor(.secondary)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(IconButtonStyle())
                     .help("移除上下文")
                 }
             }
@@ -540,6 +556,32 @@ struct ChatView: View {
     private func focusInput() {
         DispatchQueue.main.async {
             inputFocused = true
+        }
+    }
+}
+
+// MARK: - 图标按钮样式
+
+/// 面板里的自定义按钮统一用它。
+/// macOS 用户靠 hover 判断「这里能不能点」，而 `.plain` 在毛玻璃背景上
+/// 完全没有反馈，看起来像静态文本。
+struct IconButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Highlight(configuration: configuration)
+    }
+    
+    private struct Highlight: View {
+        let configuration: Configuration
+        @State private var hovering = false
+        
+        var body: some View {
+            configuration.label
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.primary.opacity(configuration.isPressed ? 0.14 : (hovering ? 0.08 : 0)))
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 6))
+                .onHover { hovering = $0 }
         }
     }
 }
@@ -620,7 +662,7 @@ struct MessageRow: View {
                   systemImage: copied ? "checkmark" : "doc.on.doc")
                 .font(.system(size: 11))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(IconButtonStyle())
         .foregroundColor(copied ? .green : .secondary)
         .animation(.easeInOut(duration: 0.15), value: copied)
     }
@@ -654,7 +696,7 @@ struct MessageRow: View {
                         Button(sourceExpanded ? "收起" : "展开原文") {
                             withAnimation(.easeInOut(duration: 0.15)) { sourceExpanded.toggle() }
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(IconButtonStyle())
                         .font(.system(size: 10))
                         .foregroundColor(.accentColor)
                         .padding(.leading, 8)
@@ -683,7 +725,7 @@ struct MessageRow: View {
                             Label("替换", systemImage: "arrow.triangle.2.circlepath")
                                 .font(.system(size: 11))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(IconButtonStyle())
                         .foregroundColor(.blue)
                         .help("切回来源应用，用结果覆盖选中的原文（选区已丢失时会粘贴在光标处）")
                         
@@ -849,7 +891,7 @@ struct CodeBlock: View {
                     Label(copied ? "已复制" : "复制", systemImage: copied ? "checkmark" : "doc.on.doc")
                         .font(.system(size: 10))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(IconButtonStyle())
                 .foregroundColor(copied ? .green : .secondary)
             }
             .padding(.horizontal, 10)
@@ -957,28 +999,28 @@ struct ImagePreviewOverlay: View {
                     Button { copyImage() } label: {
                         Label("复制", systemImage: "doc.on.doc").font(.system(size: 11))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(IconButtonStyle())
                     .foregroundColor(.secondary)
                     .help("复制到剪贴板")
                     
                     Button { saveImage() } label: {
                         Label("保存", systemImage: "square.and.arrow.down").font(.system(size: 11))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(IconButtonStyle())
                     .foregroundColor(.secondary)
                     .help("另存为…")
                     
                     Button { openImage() } label: {
                         Label("打开", systemImage: "arrow.up.forward.app").font(.system(size: 11))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(IconButtonStyle())
                     .foregroundColor(.secondary)
                     .help("用默认应用打开")
                     
                     Button { onClose() } label: {
                         Label("关闭", systemImage: "xmark").font(.system(size: 11))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(IconButtonStyle())
                     .foregroundColor(.secondary)
                     .help("关闭预览 (Esc)")
                 }
@@ -1032,13 +1074,23 @@ struct ImagePreviewOverlay: View {
 struct GeneratedImageView: View {
     let image: GeneratedImage
     
+    /// 缩略显示尺寸：按图片真实宽高比算出来，**不用 maxWidth 的容器**。
+    /// 之前用 `.frame(maxWidth: 340, maxHeight: 340)`，竖版图会被塞进 340pt 宽的框里、
+    /// 右边留出一条空白，看起来像布局坏了。
+    private var displaySize: CGSize {
+        let maxSide: CGFloat = 340
+        let w = CGFloat(image.width), h = CGFloat(image.height)
+        guard w > 0, h > 0 else { return CGSize(width: maxSide, height: maxSide) }
+        let scale = min(maxSide / w, maxSide / h, 1)   // 只缩小，不放大
+        return CGSize(width: (w * scale).rounded(), height: (h * scale).rounded())
+    }
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let nsImage = NSImage(contentsOf: image.fileURL) {
                 Image(nsImage: nsImage)
                     .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: 340, maxHeight: 340)
+                    .frame(width: displaySize.width, height: displaySize.height)
                     .cornerRadius(8)
                     .overlay(
                         RoundedRectangle(cornerRadius: 8)
@@ -1054,24 +1106,20 @@ struct GeneratedImageView: View {
                     .foregroundColor(.secondary)
             }
             
+            // 操作按钮左对齐（与变换卡片的「复制 / 替换」在同一条基线），
+            // 尺寸信息放到右侧
             HStack(spacing: 12) {
-                Text("\(image.dimensionText) · \(image.sizeText)")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                
-                Spacer()
-                
                 Button { copyToPasteboard() } label: {
                     Label("复制", systemImage: "doc.on.doc").font(.system(size: 11))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(IconButtonStyle())
                 .foregroundColor(.secondary)
                 .help("复制原图到剪贴板")
                 
                 Button { saveToDownloads() } label: {
                     Label("保存", systemImage: "square.and.arrow.down").font(.system(size: 11))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(IconButtonStyle())
                 .foregroundColor(.secondary)
                 .help("保存到「下载」文件夹")
                 
@@ -1080,9 +1128,15 @@ struct GeneratedImageView: View {
                 } label: {
                     Label("打开", systemImage: "eye").font(.system(size: 11))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(IconButtonStyle())
                 .foregroundColor(.secondary)
                 .help("用默认应用打开原图")
+                
+                Spacer(minLength: 0)
+                
+                Text("\(image.dimensionText) · \(image.sizeText)")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1227,7 +1281,7 @@ struct HistoryRow: View {
                     .font(.system(size: 11))
                     .foregroundColor(copied ? .green : .secondary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(IconButtonStyle())
             .help("复制结果")
             
             Button {
@@ -1237,7 +1291,7 @@ struct HistoryRow: View {
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(IconButtonStyle())
             .help("删除这条")
         }
         .padding(.horizontal, 12)

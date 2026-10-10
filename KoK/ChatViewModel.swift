@@ -9,6 +9,7 @@
 import SwiftUI
 import Combine
 import AppKit
+import ApplicationServices
 
 // MARK: - 自动生图路由
 
@@ -234,7 +235,12 @@ final class ChatViewModel: ObservableObject {
             if let text = capture.text, !text.isEmpty {
                 self.runTransform(text: text, action: self.activeAction)
             } else if self.messages.isEmpty {
-                self.errorMessage = "未检测到选中的文本，请先选中要处理的文字"
+                // 没授权辅助功能时，模拟 ⌘C 抓不到选中内容，给出可操作的引导
+                if !AXIsProcessTrusted() {
+                    self.errorMessage = "读取选中文字需要「辅助功能」权限：设置 ▸ 权限 ▸ 去授权，勾选 KoK 后重试"
+                } else {
+                    self.errorMessage = "未检测到选中的文本，请先选中要处理的文字"
+                }
             }
             // 抓不到就不打扰：面板上还留着上一轮的结果
             
@@ -283,6 +289,23 @@ final class ChatViewModel: ObservableObject {
             guard let self else { return }
             var received = false
             
+            // 变换路径自己的看门狗：服务端无响应时别让卡片一直转圈
+            let watchdog = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    guard !Task.isCancelled, let self else { return }
+                    guard self.activeStreamId == streamId else { return }
+                    let idle = Date().timeIntervalSince(self.lastStreamActivity)
+                    guard idle > Self.streamStallTimeout else { continue }
+                    Diagnostics.log("transform: 看门狗超时 \(Int(idle))s 无响应，中止本次请求")
+                    self.errorMessage = "模型服务 \(Int(Self.streamStallTimeout)) 秒没有响应，已中止这次请求。可以点「重试」，或换个引擎。"
+                    self.markTransformFailed(cardId: cardId, message: "超时中止")
+                    self.transformTask?.cancel()
+                    return
+                }
+            }
+            defer { watchdog.cancel() }
+            
             do {
                 let chunks: AsyncThrowingStream<String, Error>
                 if action.usesTranslationPath {
@@ -312,7 +335,11 @@ final class ChatViewModel: ObservableObject {
                 self.isStreaming = false
                 
                 if !received, !Task.isCancelled {
-                    self.errorMessage = ServiceError.emptyResponse(config.name).localizedDescription
+                    let message = ServiceError.emptyResponse(config.name).localizedDescription
+                    self.errorMessage = message
+                    self.markTransformFailed(cardId: cardId, message: "没有返回内容")
+                    self.retryable = .transform(text: text, action: action)
+                    self.runningTransformCardId = nil
                     return
                 }
                 
@@ -324,6 +351,7 @@ final class ChatViewModel: ObservableObject {
                         engine: config.name
                     )
                 }
+                self.retryable = nil
                 self.runningTransformCardId = nil
             } catch {
                 guard self.activeStreamId == streamId else { return }
@@ -331,8 +359,18 @@ final class ChatViewModel: ObservableObject {
                 self.runningTransformCardId = nil
                 if !Task.isCancelled {
                     self.errorMessage = "\(action.title)失败：\(error.localizedDescription)"
+                    self.markTransformFailed(cardId: cardId, message: "处理失败")
+                    self.retryable = .transform(text: text, action: action)
                 }
             }
+        }
+    }
+    
+    /// 变换卡片还没写出内容就失败时，把「正在处理…」换成一句明确的话，避免永远转圈
+    private func markTransformFailed(cardId: UUID, message: String) {
+        guard let index = messages.firstIndex(where: { $0.id == cardId }) else { return }
+        if messages[index].content.isEmpty {
+            messages[index].parts = [.text("（\(message)）")]
         }
     }
     
@@ -651,45 +689,76 @@ final class ChatViewModel: ObservableObject {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isGeneratingImage, !isStreaming else { return }
         
+        input = ""
+        let reference = context?.image
+        context = nil
+        generateImage(prompt: text, reference: reference)
+    }
+    
+    /// 生图的完整入口：校验 → 用户消息（含参考图）→ 占位消息 → 真正执行。
+    /// `sendImagePrompt` 与「重试」共用。
+    private func generateImage(prompt: String, reference: ImageAttachment?) {
         let manager = engineManager
         guard !manager.imageGenAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             errorMessage = "还没有配置生图服务：设置 ▸ 通用 ▸ 生图，填入 API Key"
             return
         }
         
-        input = ""
-        errorMessage = nil
-        
         var parts: [MessagePart] = []
-        if let image = context?.image {
-            parts.append(.image(image))
-        }
-        parts.append(.text(text))
+        if let image = reference { parts.append(.image(image)) }
+        parts.append(.text(prompt))
         messages.append(ChatMessage(role: .user, parts: parts))
+        messages.append(ChatMessage(role: .assistant, content: ""))
+        let placeholderId = messages[messages.count - 1].id
         
-        let reference = context?.image
-        context = nil
-        
+        startImageGeneration(prompt: prompt, reference: reference, placeholderId: placeholderId, manager: manager)
+    }
+    
+    /// 真正执行生图（手动 sendImagePrompt 与「重试」共用）。结果贴到 placeholderId 上。
+    private func startImageGeneration(
+        prompt: String,
+        reference: ImageAttachment?,
+        placeholderId: UUID,
+        manager: EngineManager
+    ) {
+        errorMessage = nil
         isGeneratingImage = true
-        Task { [weak self] in
+        retryable = .imagePrompt(text: prompt, reference: reference)
+        
+        imageGenTask?.cancel()
+        imageGenTask = Task { [weak self] in
             guard let self else { return }
             do {
                 let result = try await ImageGenerationService().generate(
-                    prompt: text,
+                    prompt: prompt,
                     reference: reference,
                     url: manager.imageGenURL,
                     apiKey: manager.imageGenAPIKey,
                     model: manager.imageGenModel,
                     size: self.imageSize.sizeParam
                 )
-                self.messages.append(ChatMessage(role: .assistant, parts: [.generatedImage(result)]))
+                guard !Task.isCancelled else { return }
+                self.attachGeneratedImage(result, to: placeholderId)
+                self.retryable = nil
             } catch {
                 if !Task.isCancelled {
-                    self.errorMessage = error.localizedDescription
+                    self.errorMessage = "生图失败：\(error.localizedDescription)"
+                    // 占位消息还没内容：撤掉，别留一个空的「正在生成图片…」
+                    self.discardEmptyPlaceholder(placeholderId)
                 }
             }
             self.isGeneratingImage = false
         }
+    }
+    
+    /// 把生成结果贴到占位消息上；占位已被清掉时单独发一条
+    private func attachGeneratedImage(_ image: GeneratedImage, to id: UUID) {
+        if let index = messages.firstIndex(where: { $0.id == id }) {
+            messages[index].parts.append(.generatedImage(image))
+        } else {
+            messages.append(ChatMessage(role: .assistant, parts: [.generatedImage(image)]))
+        }
+        Diagnostics.log("imagegen: 图片已贴到消息  \(image.dimensionText) \(image.sizeText)")
     }
     
     // MARK: - 截图
@@ -724,6 +793,31 @@ final class ChatViewModel: ObservableObject {
         startStreaming(using: config)
     }
     
+    // MARK: - 重试（按失败类型回到正确的入口，而不是一律走对话引擎）
+    
+    /// 最近一次失败的可重试操作。错误条的「重试」据此分发。
+    private enum Retryable {
+        case transform(text: String, action: ChatAction)
+        case chat
+        case imagePrompt(text: String, reference: ImageAttachment?)
+    }
+    private var retryable: Retryable?
+    
+    func retry() {
+        let op = retryable
+        retryable = nil
+        errorMessage = nil
+        switch op {
+        case .transform(let text, let action):
+            runTransform(text: text, action: action)
+        case .imagePrompt(let text, let reference):
+            isImageMode = true
+            generateImage(prompt: text, reference: reference)
+        case .chat, nil:
+            regenerate()
+        }
+    }
+    
     func stop() {
         discardRunningTransformCard()
         streamTask?.cancel()
@@ -734,12 +828,14 @@ final class ChatViewModel: ObservableObject {
         pendingForId = nil
         streamFinished = false
         isStreaming = false
+        isGeneratingImage = false
     }
     
     func clear() {
         stop()
         messages.removeAll()
         errorMessage = nil
+        retryable = nil
     }
     
     func copy(_ text: String) {
@@ -851,19 +947,29 @@ final class ChatViewModel: ObservableObject {
                     )
                 }
 
-                guard self.activeStreamId == streamId else { return }
+                guard self.activeStreamId == streamId else {
+                    // 这条流已被新请求取代：别留一个空占位在时间线上
+                    self.discardEmptyPlaceholder(placeholderId)
+                    return
+                }
                 self.isStreaming = false
                 if !received, !Task.isCancelled {
                     self.errorMessage = ServiceError.emptyResponse(config.name).localizedDescription
+                    self.retryable = .chat
+                    self.discardEmptyPlaceholder(placeholderId)
                 }
                 self.streamFinished = true
                 self.flushPendingIfReady()
             } catch {
-                guard self.activeStreamId == streamId else { return }
+                guard self.activeStreamId == streamId else {
+                    self.discardEmptyPlaceholder(placeholderId)
+                    return
+                }
                 self.isStreaming = false
                 self.discardEmptyPlaceholder(placeholderId)
                 if !Task.isCancelled {
                     self.errorMessage = error.localizedDescription
+                    self.retryable = .chat
                 }
                 self.streamFinished = true
                 self.flushPendingIfReady()

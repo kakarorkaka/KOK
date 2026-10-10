@@ -9,6 +9,7 @@ import SwiftUI
 import HotKey
 import Carbon
 import ServiceManagement
+import ApplicationServices
 
 struct SettingsView: View {
     var body: some View {
@@ -46,6 +47,7 @@ struct GeneralSettingsTab: View {
     
     @State private var voiceAuthorized = false
     @State private var screenRecordingAuthorized = false
+    @State private var axTrusted = false
     
     var body: some View {
         Form {
@@ -87,8 +89,14 @@ struct GeneralSettingsTab: View {
                         refreshPermissions()
                     }
                 }
+                
+                if !axTrusted {
+                    permissionRow("需要「辅助功能」权限（读取选中文字）") {
+                        requestAXPermission()
+                    }
+                }
             } header: {
-                Text("语音与截图")
+                Text("权限")
             } footer: {
                 Text("语音识别在本机完成，录音不出设备。")
             }
@@ -152,12 +160,25 @@ struct GeneralSettingsTab: View {
     private func refreshPermissions() {
         voiceAuthorized = VoiceInputService.microphoneAuthorized && VoiceInputService.speechAuthorized
         screenRecordingAuthorized = ScreenshotCapture.hasPermission
+        axTrusted = AXIsProcessTrusted()
     }
     
     private func requestVoicePermission() {
         Task {
             _ = await VoiceInputService.requestPermissions()
             refreshPermissions()
+        }
+    }
+    
+    /// 弹系统的辅助功能授权框；已经弹过仍没授权时，降级为打开系统设置
+    private func requestAXPermission() {
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        let trusted = AXIsProcessTrustedWithOptions(options)
+        refreshPermissions()
+        if !trusted {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                NSWorkspace.shared.open(url)
+            }
         }
     }
 }

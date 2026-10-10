@@ -98,7 +98,7 @@ struct ChatView: View {
                 }
             }
             
-            if viewModel.isStreaming {
+            if viewModel.isStreaming || viewModel.isGeneratingImage {
                 Button { viewModel.stop() } label: {
                     Image(systemName: "stop.circle")
                         .font(.system(size: 12))
@@ -296,7 +296,7 @@ struct ChatView: View {
             
             Spacer(minLength: 0)
             
-            Button { viewModel.regenerate() } label: {
+            Button { viewModel.retry() } label: {
                 Text("重试").font(.caption)
             }
             .buttonStyle(.plain)

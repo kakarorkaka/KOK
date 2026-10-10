@@ -13,6 +13,17 @@
 
 import AppKit
 
+/// 生图专用的 URLSession：显式超时。
+/// 之前用 URLSession.shared，睡醒/换网后 socket 可能悄悄失效，
+/// 生图请求会一直挂起、`isGeneratingImage` 恒真、面板失去响应。
+private let imageGenSession: URLSession = {
+    let config = URLSessionConfiguration.default
+    config.timeoutIntervalForRequest = 180
+    config.timeoutIntervalForResource = 600
+    config.waitsForConnectivity = false
+    return URLSession(configuration: config)
+}()
+
 /// 生成好的图片：全尺寸原图已下载到本地
 struct GeneratedImage: Equatable {
     let fileURL: URL
@@ -112,7 +123,7 @@ final class ImageGenerationService {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await imageGenSession.data(for: request)
         
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
             let detail = String(data: data, encoding: .utf8) ?? "未知错误"
@@ -141,7 +152,7 @@ final class ImageGenerationService {
         Diagnostics.log("imagegen: 出图 \(imageURLString.prefix(80))")
         
         // ── 立刻下载（COS 签名 URL 会过期，不能留给用户自己去点）──
-        let (imageData, _) = try await URLSession.shared.data(from: imageURL)
+        let (imageData, _) = try await imageGenSession.data(from: imageURL)
         guard !imageData.isEmpty else { throw ServiceError.emptyResponse("生图服务") }
         
         let dir = FileManager.default.temporaryDirectory

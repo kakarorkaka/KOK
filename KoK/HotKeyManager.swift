@@ -46,8 +46,8 @@ enum HotKeyAction: String, CaseIterable, Identifiable {
     /// 遇到冲突**不会报错**，事件会被先注册方静默吃掉，表现为「按了完全没反应」。
     var defaultShortcut: (key: Key, modifiers: NSEvent.ModifierFlags) {
         switch self {
-        case .translate: return (.d, [.option])
-        case .chat: return (.one, [.command])
+        case .translate: return (.two, [.command])
+        case .chat: return (.three, [.command])
         // ⌥S / ⌥A 都被 iShot 占了（区域截图 / 快速截图）
         case .screenshot: return (.c, [.option])
         }
@@ -133,12 +133,13 @@ class HotKeyManager: ObservableObject {
     
     /// 内置默认值版本。每次更换默认键就 +1。
     private static let defaultsVersionKey = "shortcut_defaults_version"
-    private static let defaultsVersion = 1
+    private static let defaultsVersion = 2
     
     /// 历史上作为默认值发布过、现已废弃的组合。
     /// 用户保存的值命中这里，说明他从没手动改过，就跟着新默认一起升级。
     private static let deprecatedDefaults: [HotKeyAction: [(Key, NSEvent.ModifierFlags)]] = [
-        .chat: [(.a, [.option]), (.k, [.option])]
+        .translate: [(.d, [.option])],
+        .chat: [(.a, [.option]), (.k, [.option]), (.one, [.command])],
     ]
     
     private static func isDeprecatedDefault(_ action: HotKeyAction, key: Key, modifierRaw: Int) -> Bool {

@@ -82,6 +82,8 @@ final class ChatViewModel: ObservableObject {
     @Published var isListening = false
     /// 生图模式：输入框的内容当提示词，截图/图片上下文当参考图
     @Published var isImageMode = false
+    /// 当前动作（临时状态：下一条消息按它处理，发完回到默认「问答」）
+    @Published var activeAction: ChatAction = .chat
     /// 是否正在生图
     @Published var isGeneratingImage = false
     /// 生成尺寸（auto 时不传 size，由模型决定）
@@ -155,6 +157,11 @@ final class ChatViewModel: ObservableObject {
         engineManager.selectChatEngine(id: id)
     }
     
+    /// 选一个动作：只对下一条消息生效，发完自动回到「问答」
+    func selectAction(_ action: ChatAction) {
+        activeAction = action
+    }
+    
     func send() {
         if isImageMode {
             sendImagePrompt()
@@ -173,6 +180,8 @@ final class ChatViewModel: ObservableObject {
         messages.append(userMessage(text: text, context: context))
         context = nil
         startStreaming(using: config)
+        // 动作是临时形态：这条已经发出去了，下一条回到默认「问答」
+        activeAction = .chat
     }
     
     /// 把选中内容拼进用户消息：图片作为独立片段，文本带个前缀标明来源
@@ -650,17 +659,28 @@ final class ChatViewModel: ObservableObject {
         messages.remove(at: index)
     }
     
-    /// 请求体 = 对话提示词 + 最近若干轮，且保证以 user 开头
+    /// 当前动作对应的系统提示词。
+    /// 问答用设置里的对话提示词（生图服务可用时附加路由规则）；
+    /// 总结 / 润色用动作自带的提示词。
+    private func activeSystemPrompt() -> String {
+        if activeAction == .chat {
+            var prompt = engineManager.chatSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            // 生图服务可用时才附加路由规则，避免没有生图 Key 时模型白打标记
+            if !engineManager.imageGenAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                prompt = prompt.isEmpty
+                    ? ImageGenIntentMarker.routingInstruction
+                    : prompt + "\n\n" + ImageGenIntentMarker.routingInstruction
+            }
+            return prompt
+        }
+        return activeAction.systemPrompt
+    }
+    
+    /// 请求体 = 动作提示词 + 最近若干轮，且保证以 user 开头
     private func buildPayload() -> [ChatMessage] {
         var payload: [ChatMessage] = []
         
-        var systemPrompt = engineManager.chatSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        // 生图服务可用时才附加路由规则，避免没有生图 Key 时模型白打标记
-        if !engineManager.imageGenAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            systemPrompt = systemPrompt.isEmpty
-                ? ImageGenIntentMarker.routingInstruction
-                : systemPrompt + "\n\n" + ImageGenIntentMarker.routingInstruction
-        }
+        let systemPrompt = activeSystemPrompt().trimmingCharacters(in: .whitespacesAndNewlines)
         if !systemPrompt.isEmpty {
             payload.append(ChatMessage(role: .system, content: systemPrompt))
         }

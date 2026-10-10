@@ -21,6 +21,7 @@ struct ChatView: View {
         VStack(spacing: 0) {
             toolbar
             Divider()
+            actionCapsules
             transcript
             if let error = viewModel.errorMessage {
                 Divider()
@@ -142,6 +143,26 @@ struct ChatView: View {
                 }
                 .onEnded { _ in dragOffset = nil }
         )
+    }
+    
+    // MARK: - 动作胶囊
+    
+    /// 临时形态：点一下，下一条消息按这个动作处理，发完回到「问答」
+    private var actionCapsules: some View {
+        HStack(spacing: 6) {
+            ForEach(ChatAction.chatPanelActions) { act in
+                ActionCapsule(
+                    title: act.title,
+                    icon: act.icon,
+                    isActive: viewModel.activeAction == act
+                ) {
+                    viewModel.selectAction(act)
+                }
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
     }
     
     // MARK: - 消息区

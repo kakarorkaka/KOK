@@ -18,6 +18,8 @@ final class WindowManager: PanelController {
     
     var viewModel = TranslationViewModel()
     private var captureTask: Task<Void, Never>?
+    /// 最近一次抓取时的来源 App（「替换」时切回它再粘贴）
+    private var lastSourceApp: NSRunningApplication?
     
     private override init() {
         super.init()
@@ -78,8 +80,17 @@ final class WindowManager: PanelController {
         panel?.orderOut(nil)
         stopMonitors()
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            self.simulatePasteCommand()
+        Diagnostics.log("replace: 切回 \(lastSourceApp?.localizedName ?? "?") 并粘贴  长度=\(viewModel.translatedText.count)")
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self else { return }
+            // 把来源 App 提回前台，⌘V 才会落到原文选区上而不是 KoK 自己
+            if let app = self.lastSourceApp {
+                app.activate(options: [.activateIgnoringOtherApps])
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                self.simulatePasteCommand()
+            }
         }
     }
     
@@ -101,12 +112,17 @@ final class WindowManager: PanelController {
         captureTask = Task { [weak self] in
             guard let self else { return }
             
+            // 每次弹出都回到默认形态（翻译）
+            self.viewModel.prepareForNewCapture()
+            
             // 等一下让快捷键的修饰键先松开，否则 ⌘C 会和它叠加
             try? await Task.sleep(nanoseconds: 50_000_000)
             
             let capture = await SelectionProvider.capture()
             
             guard !Task.isCancelled else { return }
+            
+            self.lastSourceApp = capture.sourceApp
             
             if let text = capture.text {
                 self.viewModel.translate(text: text)

@@ -24,6 +24,9 @@ enum SelectionProvider {
         var truncated = false
         /// 上下文 chip 的自定义文案；nil 时显示「选中文本 N 字」
         var label: String?
+        /// 抓取时刻的前台 App。「替换选中文本」时切回它再模拟 ⌘V，
+        /// 否则结果会粘到 KoK 自己（或用户后来切过去的 App）身上
+        var sourceApp: NSRunningApplication?
         
         var isEmpty: Bool { text == nil && image == nil }
     }
@@ -38,6 +41,8 @@ enum SelectionProvider {
         let before = pasteboard.changeCount
         let trusted = AXIsProcessTrusted()
         let started = Date()
+        let sourceApp = NSWorkspace.shared.frontmostApplication
+        Diagnostics.log("capture: 来源App=\(sourceApp?.localizedName ?? "?")")
         
         // 先看一眼「按快捷键之前」剪贴板里是不是已经有图片
         let existingImage = ImageEncoder.encode(pasteboard: pasteboard)
@@ -51,7 +56,8 @@ enum SelectionProvider {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if pasteboard.changeCount != before {
-                let capture = read(from: pasteboard)
+                var capture = read(from: pasteboard)
+                capture.sourceApp = sourceApp
                 let ms = Int(Date().timeIntervalSince(started) * 1000)
                 Diagnostics.log("capture: 剪贴板已变  \(ms)ms  changeCount=\(before)→\(pasteboard.changeCount)"
                                 + "  文本=\(capture.text?.count ?? 0)字  图片=\(capture.image != nil ? "有" : "无")")
@@ -70,10 +76,10 @@ enum SelectionProvider {
         if let existingImage {
             Diagnostics.log("capture: 采用按之前已存在的图片作为上下文"
                             + "  \(existingImage.dimensionText)  \(existingImage.sizeText)")
-            return Capture(text: nil, image: existingImage)
+            return Capture(text: nil, image: existingImage, sourceApp: sourceApp)
         }
         
-        return Capture()
+        return Capture(sourceApp: sourceApp)
     }
     
     private static func pasteboardTypes(_ pasteboard: NSPasteboard) -> String {

@@ -33,8 +33,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         _ = EngineManager.shared
         
         // 2. 注册全局快捷键（每个动作一个）
+        //   ⌘2 = 抓取选中内容 → 按当前动作立即处理
+        //   ⌘3 = 点按打开面板问答 / 按住说话
         HotKeyManager.shared.handlers[.translate] = {
-            WindowManager.shared.toggleTranslation()
+            ChatPanelController.shared.triggerTransform()
         }
         // 合并键：点按打开，按住说话
         HotKeyManager.shared.handlers[.chat] = {
@@ -53,12 +55,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 3.5 首次启动引导
         showOnboardingIfNeeded()
         
-        // 4. 面板预热：两个面板是「预创建 + 只做 Show/Hide」，
-        //    创建一次实测约 420ms（对话面板 361ms + 翻译面板 62ms），之后唤出只要几毫秒。
+        // 4. 面板预热：面板是「预创建 + 只做 Show/Hide」，
+        //    创建一次实测约 400ms，之后唤出只要几毫秒。
         //    放到启动完成之后再异步做，状态栏就不会被这段开销拖慢；
         //    等用户第一次按下快捷键时，面板早已就绪。
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-            _ = WindowManager.shared
             _ = ChatPanelController.shared
         }
     }

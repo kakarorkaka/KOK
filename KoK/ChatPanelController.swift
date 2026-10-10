@@ -2,9 +2,13 @@
 //  ChatPanelController.swift
 //  KoK
 //
-//  快速问答面板的窗口控制器。面板行为全部复用 `PanelController` 基类。
+//  统一面板的窗口控制器（4.0：翻译面板与对话面板合并成一个）。
 //
-//  快捷键语义：同一个键，点按打开面板，按住说话。
+//  两个入口，同一个面板：
+//  - ⌘2 → 抓取选中内容，按当前动作立即处理（翻译 / 总结 / 润色）
+//  - ⌘3 → 点按打开面板问问题；按住说话（同一个键的点按/按住语义）
+//
+//  面板高度自适应内容：只有一张卡片时保持紧凑，聊起来才变高。
 //
 
 import AppKit
@@ -19,8 +23,8 @@ final class ChatPanelController: PanelController {
     override var preferredWidth: CGFloat { 460 }
     override var persistenceKey: String { "chat" }
     override var wantsSizePersistence: Bool { true }
-    override var preferredHeight: CGFloat { 420 }
-    override var minimumSize: NSSize { NSSize(width: 360, height: 240) }
+    override var preferredHeight: CGFloat { 300 }
+    override var minimumSize: NSSize { NSSize(width: 360, height: 180) }
     override var maximumSize: NSSize { NSSize(width: 1000, height: 1000) }
     
     /// 点按与按住的分界。快速点按通常 50–150ms，刻意按住一般超过 250ms。
@@ -32,8 +36,19 @@ final class ChatPanelController: PanelController {
     private var holdTask: Task<Void, Never>?
     private var isHolding = false
     
+    /// 自适应高度的上限 = 用户手动拖到过的最大高度
+    private var heightLimit: CGFloat = 560
+    /// 最近一次由内容驱动的目标高度（用来区分「自动变高」和「用户拖动」）
+    private var lastAppliedHeight: CGFloat?
+    private var lastContentHeight: CGFloat?
+    
+    private static let heightLimitKey = "panel_height_limit_chat"
+    
     private override init() {
         super.init()
+        if let stored = UserDefaults.standard.object(forKey: Self.heightLimitKey) as? Double {
+            heightLimit = CGFloat(stored)
+        }
         setupPanel()
     }
     
@@ -44,6 +59,9 @@ final class ChatPanelController: PanelController {
         contentView.onDismiss = { [weak self] in
             self?.hideWindow()
         }
+        contentView.onContentHeightChange = { [weak self] height in
+            self?.applyContentHeight(height)
+        }
         installContent(contentView)
         
         viewModel.onNeedsForeground = { [weak self] in
@@ -52,9 +70,8 @@ final class ChatPanelController: PanelController {
             self?.showWindow(activate: true)
         }
         
-        onWillShow = {
-            // 只做与翻译面板的互斥，焦点统一由 openChat / 语音流程处理
-            WindowManager.shared.hideWindow()
+        viewModel.onRequestHide = { [weak self] in
+            self?.hideWindow()
         }
         
         // Esc：先关图片预览，没有预览才收面板
@@ -68,11 +85,22 @@ final class ChatPanelController: PanelController {
         }
     }
     
-    // MARK: - 打开（点按 / 左键 / 菜单）
+    // MARK: - 入口一：⌘2（抓取 → 立即处理）
+    
+    /// 抓取选中内容并按当前动作处理。抓取期间不主动显示面板，
+    /// 免得把面板自己截进选区，也免得抢走原 App 的焦点。
+    func triggerTransform() {
+        viewModel.prepareForNewOpening()
+        viewModel.activeAction = .translate
+        viewModel.beginTransform()
+    }
+    
+    // MARK: - 入口二：⌘3（点按打开 / 按住说话）
     
     /// 打开面板并聚焦输入框。已可见时只聚焦、不关闭——
     /// 否则「按住问完 → 点按追问」会变成把面板关了。
     func openChat() {
+        viewModel.activeAction = .chat
         if !isVisible {
             showWindow(activate: true)
         } else {
@@ -81,8 +109,6 @@ final class ChatPanelController: PanelController {
         }
         viewModel.requestFocus()
     }
-    
-    // MARK: - 合并键：点按 / 按住
     
     /// 按下：面板先以不抢焦点的方式弹出（按住时要模拟 ⌘C，焦点必须留在原 App），
     /// 同时启动判别计时器。
@@ -96,6 +122,7 @@ final class ChatPanelController: PanelController {
             try? await Task.sleep(nanoseconds: UInt64(Self.holdThreshold * 1_000_000_000))
             guard !Task.isCancelled else { return }
             self?.isHolding = true
+            self?.viewModel.activeAction = .chat
             self?.viewModel.beginVoice(captureSelection: true)
         }
     }
@@ -131,5 +158,61 @@ final class ChatPanelController: PanelController {
     /// 框选屏幕区域作为上下文。截图期间不显示面板，免得被截进去。
     func captureScreenshot() {
         viewModel.captureScreenshot()
+    }
+    
+    // MARK: - 内容自适应高度
+    
+    /// 视图报上来的自然高度：窗口高度 = clamp(内容高度, 最小, 用户拖到过的上限)
+    private func applyContentHeight(_ contentHeight: CGFloat) {
+        lastContentHeight = contentHeight
+        guard let panel, panel.isVisible else { return }
+        resizeToFit(contentHeight: contentHeight, animate: true)
+    }
+    
+    private func resizeToFit(contentHeight: CGFloat, animate: Bool) {
+        guard let panel else { return }
+        let target = min(max(contentHeight.rounded(), minimumSize.height), heightLimit)
+        guard abs(panel.frame.height - target) > 2 else { return }
+        
+        var frame = panel.frame
+        let top = frame.maxY
+        frame.size.height = target
+        frame.origin.y = top - target      // 顶部锚定，视觉上不跳
+        
+        lastAppliedHeight = target
+        if animate {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.12
+                panel.animator().setFrame(frame, display: true)
+            }
+        } else {
+            panel.setFrame(frame, display: true)
+        }
+    }
+    
+    override func showWindow(activate: Bool = true, makeKey: Bool = true) {
+        // 显示前先按上次的内容高度摆好，避免先大后小的跳动
+        if let lastContentHeight, let panel {
+            var frame = panel.frame
+            let target = min(max(lastContentHeight.rounded(), minimumSize.height), heightLimit)
+            frame.size.height = target
+            frame.origin.y = frame.maxY - target
+            lastAppliedHeight = target
+            panel.setFrame(frame, display: true)
+        }
+        super.showWindow(activate: activate, makeKey: makeKey)
+    }
+    
+    override func windowDidResize(_ notification: Notification) {
+        guard let panel else { return }
+        let height = panel.frame.height
+        // 自动变高不算「用户调整」：只有差得明显才更新上限
+        if let applied = lastAppliedHeight, abs(height - applied) <= 2 {
+            super.windowDidResize(notification)
+            return
+        }
+        heightLimit = max(height, minimumSize.height)
+        UserDefaults.standard.set(Double(heightLimit), forKey: Self.heightLimitKey)
+        super.windowDidResize(notification)
     }
 }

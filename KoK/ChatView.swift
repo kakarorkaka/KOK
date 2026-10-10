@@ -11,9 +11,12 @@ import UniformTypeIdentifiers
 struct ChatView: View {
     @ObservedObject var viewModel: ChatViewModel
     var onDismiss: (() -> Void)?
+    /// 内容高度变化（面板据此自适应高度：只有一张卡片时保持紧凑）
+    var onContentHeightChange: ((CGFloat) -> Void)?
     
     @FocusState private var inputFocused: Bool
     @State private var dragOffset: CGPoint?
+    @State private var showingHistory = false
     
     private let bottomAnchor = "chat-bottom"
     
@@ -48,6 +51,16 @@ struct ChatView: View {
         .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
         .onAppear { focusInput() }
         .onChange(of: viewModel.focusRequest) { _, _ in focusInput() }
+        .onChange(of: viewModel.input) { _, newValue in
+            // 开始打字 = 在追问：胶囊自动回到「问答」，行为自解释
+            if !newValue.isEmpty, viewModel.activeAction != .chat {
+                viewModel.activeAction = .chat
+            }
+        }
+        .onPreferenceChange(ViewHeightKey.self) { contentHeight in
+            // 工具栏 45 + 胶囊行 34 + 输入区 52 ≈ 131
+            onContentHeightChange?(contentHeight + 131)
+        }
         .overlay {
             if let image = viewModel.previewImage {
                 ImagePreviewOverlay(image: image) { viewModel.closePreview() }
@@ -59,30 +72,15 @@ struct ChatView: View {
     
     private var toolbar: some View {
         HStack(spacing: 8) {
-            Image(systemName: "bubble.left.and.text.bubble.right")
+            Image(systemName: viewModel.activeAction.icon)
                 .foregroundColor(.purple)
             
-            Menu {
-                EngineMenuContent(
-                    groups: viewModel.engineManager.engineGroups(chatOnly: true),
-                    selectedId: viewModel.engineManager.selectedChatEngine?.id
-                ) { id in
-                    viewModel.selectEngine(id: id)
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Text(viewModel.selectedEngineName)
-                        .font(.system(size: 12))
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 9))
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.primary.opacity(0.06))
-                .cornerRadius(6)
+            engineMenu
+            
+            // 语言方向只对翻译动作有意义
+            if viewModel.activeAction.supportsDirection {
+                directionMenu
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
             
             if viewModel.copyFeedback {
                 Text("已复制")
@@ -92,6 +90,19 @@ struct ChatView: View {
             }
             
             Spacer()
+            
+            if !viewModel.history.isEmpty {
+                Button { showingHistory.toggle() } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("翻译历史")
+                .popover(isPresented: $showingHistory) {
+                    HistoryPopover(viewModel: viewModel, isPresented: $showingHistory)
+                }
+            }
             
             if viewModel.isStreaming {
                 Button { viewModel.stop() } label: {
@@ -147,10 +158,70 @@ struct ChatView: View {
     
     // MARK: - 动作胶囊
     
-    /// 临时形态：点一下，下一条消息按这个动作处理，发完回到「问答」
+    /// 引擎列表随动作切换：翻译用翻译引擎（可能是 DeepL），其余用对话引擎
+    private var engineMenu: some View {
+        Menu {
+            EngineMenuContent(
+                groups: viewModel.engineManager.engineGroups(chatOnly: !viewModel.activeAction.usesTranslationPath),
+                selectedId: viewModel.activeAction.usesTranslationPath
+                    ? viewModel.engineManager.selectedEngineId
+                    : viewModel.engineManager.selectedChatEngine?.id
+            ) { id in
+                viewModel.selectEngine(id: id)
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(viewModel.selectedEngineName)
+                    .font(.system(size: 12))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.primary.opacity(0.06))
+            .cornerRadius(6)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+    
+    private var directionMenu: some View {
+        Menu {
+            ForEach(TranslateDirection.allCases) { dir in
+                Button(action: { viewModel.selectDirection(dir) }) {
+                    HStack {
+                        Text(dir.title)
+                        if dir == viewModel.direction {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "arrow.left.arrow.right")
+                    .font(.system(size: 9))
+                Text(viewModel.direction.title)
+                    .font(.system(size: 12))
+                    .lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.primary.opacity(0.06))
+            .cornerRadius(6)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+    
+    /// 临时形态：点一下，这一次按这个动作处理。零输入动作点完立即执行。
     private var actionCapsules: some View {
         HStack(spacing: 6) {
-            ForEach(ChatAction.chatPanelActions) { act in
+            ForEach(ChatAction.allCases) { act in
                 ActionCapsule(
                     title: act.title,
                     icon: act.icon,
@@ -171,17 +242,18 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    if viewModel.messages.isEmpty {
+                    if visibleMessages.isEmpty {
                         emptyHint
                     }
                     
-                    ForEach(viewModel.messages) { message in
+                    ForEach(visibleMessages) { message in
                         MessageRow(
                             message: message,
                             isStreaming: viewModel.isStreaming,
                             isGeneratingImage: viewModel.isGeneratingImage,
                             onCopy: { viewModel.copy($0) },
-                            onPreview: { viewModel.preview($0) }
+                            onPreview: { viewModel.preview($0) },
+                            onReplace: { viewModel.replaceSelection() }
                         )
                     }
                     
@@ -189,6 +261,9 @@ struct ChatView: View {
                 }
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .background(GeometryReader { geometry in
+                    Color.clear.preference(key: ViewHeightKey.self, value: geometry.size.height)
+                })
             }
             .onChange(of: viewModel.messages) { _, _ in
                 withAnimation(.easeOut(duration: 0.12)) {
@@ -196,6 +271,11 @@ struct ChatView: View {
                 }
             }
         }
+    }
+    
+    /// 「变换卡片」的原文是一条隐藏消息（内容已经显示在卡片里了），不渲染
+    private var visibleMessages: [ChatMessage] {
+        viewModel.messages.filter { !$0.hidden }
     }
     
     private var emptyHint: some View {
@@ -427,6 +507,7 @@ struct MessageRow: View {
     let isGeneratingImage: Bool
     let onCopy: (String) -> Void
     let onPreview: (ImageAttachment) -> Void
+    let onReplace: () -> Void
     
     var body: some View {
         switch message.role {
@@ -461,6 +542,91 @@ struct MessageRow: View {
             }
             
         case .assistant:
+            if message.transformSource != nil {
+                transformCard
+            } else {
+                assistantRow
+            }
+            
+        case .system:
+            EmptyView()
+        }
+    }
+    
+    // MARK: - 变换卡片（原文 → 结果，带复制 / 替换）
+    
+    private var transformCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: message.transformAction?.icon ?? "wand.and.stars")
+                    .font(.system(size: 10))
+                Text(message.transformAction?.title ?? "处理")
+                    .font(.system(size: 11, weight: .medium))
+                Spacer(minLength: 0)
+            }
+            .foregroundColor(.secondary)
+            
+            if let source = message.transformSource {
+                Text(source)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .lineLimit(3)
+                    .textSelection(.enabled)
+                    .padding(.leading, 8)
+                    .overlay(alignment: .leading) {
+                        Rectangle()
+                            .fill(Color.secondary.opacity(0.3))
+                            .frame(width: 2)
+                    }
+            }
+            
+            if message.content.isEmpty {
+                HStack(spacing: 6) {
+                    ProgressView().scaleEffect(0.5)
+                    Text("正在处理…").font(.caption).foregroundColor(.secondary)
+                }
+            } else {
+                Text(message.content)
+                    .font(.system(size: 13))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                
+                if !isStreaming {
+                    HStack(spacing: 14) {
+                        Spacer(minLength: 0)
+                        
+                        Button { onCopy(message.content) } label: {
+                            Label("复制", systemImage: "doc.on.doc")
+                                .font(.system(size: 11))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(.secondary)
+                        
+                        Button { onReplace() } label: {
+                            Label("替换", systemImage: "arrow.triangle.2.circlepath")
+                                .font(.system(size: 11))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(.blue)
+                        .help("切回来源应用，用结果覆盖选中的原文（选区已丢失时会粘贴在光标处）")
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.04))
+        .cornerRadius(10)
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        )
+    }
+    
+    // MARK: - 普通助手回复
+    
+    private var assistantRow: some View {
             VStack(alignment: .leading, spacing: 6) {
                 if message.content.isEmpty && !message.hasGeneratedImage {
                     HStack(spacing: 6) {
@@ -493,10 +659,6 @@ struct MessageRow: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            
-        case .system:
-            EmptyView()
-        }
     }
 }
 
@@ -860,5 +1022,92 @@ struct GeneratedImageView: View {
             guard response == .OK, let url = panel.url else { return }
             try? data.write(to: url)
         }
+    }
+}
+
+// MARK: - 内容高度测量（面板自适应高度用）
+
+struct ViewHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+// MARK: - 翻译历史弹出框
+
+struct HistoryPopover: View {
+    @ObservedObject var viewModel: ChatViewModel
+    @Binding var isPresented: Bool
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("翻译历史")
+                    .font(.headline)
+                Spacer()
+                if !viewModel.history.isEmpty {
+                    Button("清空") {
+                        viewModel.clearHistory()
+                    }
+                    .font(.caption)
+                    .foregroundColor(.red)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+            
+            Divider()
+            
+            if viewModel.history.isEmpty {
+                VStack {
+                    Spacer()
+                    Text("暂无翻译记录")
+                        .foregroundColor(.secondary)
+                        .font(.caption)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(viewModel.history) { record in
+                            Button(action: {
+                                viewModel.translateFromHistory(record)
+                                isPresented = false
+                            }) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(record.sourceText)
+                                        .font(.system(size: 12))
+                                        .lineLimit(1)
+                                        .foregroundColor(.primary)
+                                    Text(record.translatedText)
+                                        .font(.system(size: 11))
+                                        .lineLimit(1)
+                                        .foregroundColor(.secondary)
+                                    HStack {
+                                        Text(record.engineName)
+                                            .font(.caption2)
+                                            .foregroundColor(.blue)
+                                        Spacer()
+                                        Text(record.timestamp, style: .relative)
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            
+                            Divider().padding(.leading, 12)
+                        }
+                    }
+                }
+            }
+        }
+        .frame(width: 320, height: 300)
     }
 }

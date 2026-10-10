@@ -8,6 +8,7 @@
 
 import SwiftUI
 import Combine
+import AppKit
 
 // MARK: - 自动生图路由
 
@@ -103,6 +104,8 @@ final class ChatViewModel: ObservableObject {
     /// 语音与截图都会先以不抢焦点的方式工作（否则抓不到原 App 的选中内容），
     /// 拿到结果后再统一交给控制器把面板显示出来。
     var onNeedsForeground: (() -> Void)?
+    /// 「收起面板」的回调（替换选中文本时要把面板让开）
+    var onRequestHide: (() -> Void)?
     private var cancellables = Set<AnyCancellable>()
     
     init() {
@@ -116,6 +119,8 @@ final class ChatViewModel: ObservableObject {
            let size = ImageGenSize(rawValue: saved) {
             imageSize = size
         }
+        
+        loadHistory()
     }
     
     func selectImageSize(_ size: ImageGenSize) {
@@ -139,8 +144,25 @@ final class ChatViewModel: ObservableObject {
     /// 送入模型的最大历史条数（约 10 轮）
     private let maxContextMessages = 20
     
+    // MARK: - 变换（零输入动作：选中 → 翻译 / 总结 / 润色）
+    
+    /// 翻译方向（只在「翻译」动作下出现）
+    @Published var direction: TranslateDirection = .auto
+    /// 翻译历史
+    @Published var history: [TranslationRecord] = []
+    
+    private let translationService = UnifiedTranslationService()
+    private var transformTask: Task<Void, Never>?
+    /// 最近一次抓取时的来源 App（「替换」时切回它再粘贴）
+    private var lastSourceApp: NSRunningApplication?
+    private let historyKey = "translation_history"
+    private let directionKey = "translation_direction"
+    private let maxHistoryCount = 50
+    
     var selectedEngineName: String {
-        engineManager.selectedChatEngine?.name ?? "未选择"
+        activeAction.usesTranslationPath
+            ? engineManager.selectedEngine?.name ?? "未选择"
+            : engineManager.selectedChatEngine?.name ?? "未选择"
     }
     
     var canSend: Bool {
@@ -153,13 +175,264 @@ final class ChatViewModel: ObservableObject {
         focusRequest += 1
     }
     
+    /// 引擎列表随动作切换：翻译用翻译引擎（可能是 DeepL），其余用对话引擎
     func selectEngine(id: UUID) {
-        engineManager.selectChatEngine(id: id)
+        if activeAction.usesTranslationPath {
+            engineManager.selectEngine(id: id)
+        } else {
+            engineManager.selectChatEngine(id: id)
+        }
     }
     
-    /// 选一个动作：只对下一条消息生效，发完自动回到「问答」
+    /// 选一个动作：只对下一条消息生效，发完自动回到默认「问答」。
+    /// 零输入动作（翻译/总结/润色）点一下就立刻处理——优先用上一次的原文，
+    /// 其次用输入框里的内容。
     func selectAction(_ action: ChatAction) {
+        let previous = activeAction
         activeAction = action
+        guard !action.needsInput else {
+            requestFocus()
+            return
+        }
+        
+        if let source = lastTransformSource {
+            runTransform(text: source, action: action)
+        } else if !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
+            input = ""
+            runTransform(text: text, action: action)
+        } else if previous != action {
+            errorMessage = "先选中一段文本再来（选中后按 ⌘2 最顺手）"
+        }
+    }
+    
+    // MARK: - 变换动作（⌘2 开场：抓取选中 → 立即执行）
+    
+    /// 最近一次变换的原文
+    var lastTransformSource: String? {
+        messages.last(where: { $0.transformSource != nil })?.transformSource
+    }
+    
+    /// ⌘2 入口：抓取当前选中文本，用当前动作立即处理
+    func beginTransform() {
+        transformTask?.cancel()
+        transformTask = Task { [weak self] in
+            guard let self else { return }
+            self.prepareForNewOpening()
+            
+            // 等一下让快捷键的修饰键先松开，否则 ⌘C 会和它叠加
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            
+            let capture = await SelectionProvider.capture()
+            guard !Task.isCancelled else { return }
+            
+            self.lastSourceApp = capture.sourceApp
+            
+            if let text = capture.text, !text.isEmpty {
+                self.runTransform(text: text, action: self.activeAction)
+            } else if self.messages.isEmpty {
+                self.errorMessage = "未检测到选中的文本，请先选中要处理的文字"
+            }
+            // 抓不到就不打扰：面板上还留着上一轮的结果
+            
+            self.onNeedsForeground?()
+        }
+    }
+    
+    /// 零输入动作：把文本交给动作对应的引擎，结果做成一张「变换卡片」
+    func runTransform(text: String, action: ChatAction) {
+        let config = action.usesTranslationPath ? engineManager.selectedEngine : engineManager.selectedChatEngine
+        guard let config else {
+            errorMessage = action.usesTranslationPath
+                ? "请先在设置中添加并选择一个翻译引擎"
+                : "没有可用于「\(action.title)」的对话引擎，请先在设置中添加并启用一个"
+            return
+        }
+        
+        errorMessage = nil
+        voiceError = nil
+        activeAction = action
+        isImageMode = false
+        
+        // 原文放进一条隐藏的 user 消息：卡片自己会显示原文，但上下文里要有它
+        messages.append(ChatMessage(role: .user, parts: [.text(text)], hidden: true))
+        var card = ChatMessage(role: .assistant, content: "")
+        card.transformSource = text
+        card.transformActionId = action.rawValue
+        messages.append(card)
+        let cardId = card.id
+        
+        isStreaming = true
+        streamFinished = false
+        lastStreamActivity = Date()
+        let streamId = UUID()
+        activeStreamId = streamId
+        
+        transformTask?.cancel()
+        transformTask = Task { [weak self] in
+            guard let self else { return }
+            var received = false
+            
+            do {
+                let chunks: AsyncThrowingStream<String, Error>
+                if action.usesTranslationPath {
+                    chunks = self.translationService.translateStream(
+                        text: text,
+                        to: self.makeTarget(for: text),
+                        using: config
+                    )
+                } else {
+                    chunks = self.service.stream(
+                        messages: [
+                            ChatMessage(role: .system, content: action.systemPrompt),
+                            ChatMessage(role: .user, content: text),
+                        ],
+                        using: config
+                    )
+                }
+                
+                for try await chunk in chunks {
+                    if Task.isCancelled { break }
+                    received = true
+                    self.lastStreamActivity = Date()
+                    self.append(chunk, to: cardId)
+                }
+                
+                guard self.activeStreamId == streamId else { return }
+                self.isStreaming = false
+                
+                if !received, !Task.isCancelled {
+                    self.errorMessage = ServiceError.emptyResponse(config.name).localizedDescription
+                    return
+                }
+                
+                // 只有翻译进历史；总结 / 润色不污染翻译历史
+                if action.usesTranslationPath, !Task.isCancelled {
+                    self.addToHistory(
+                        source: text,
+                        translated: self.content(of: cardId).trimmingCharacters(in: .whitespacesAndNewlines),
+                        engine: config.name
+                    )
+                }
+            } catch {
+                guard self.activeStreamId == streamId else { return }
+                self.isStreaming = false
+                if !Task.isCancelled {
+                    self.errorMessage = "\(action.title)失败：\(error.localizedDescription)"
+                }
+            }
+        }
+    }
+    
+    private func content(of id: UUID) -> String {
+        messages.first(where: { $0.id == id })?.content ?? ""
+    }
+    
+    // MARK: - 翻译方向 / 历史 / 替换
+    
+    private func makeTarget(for text: String) -> TranslationTarget {
+        let sourceIsChinese = text.range(of: "\\p{Han}", options: .regularExpression) != nil
+        let sourceName = sourceIsChinese ? "Simplified Chinese" : "English"
+        
+        switch direction {
+        case .auto:
+            return TranslationTarget(
+                code: sourceIsChinese ? "EN-US" : "ZH",
+                languageName: sourceIsChinese ? "English" : "Simplified Chinese",
+                sourceName: sourceName
+            )
+        default:
+            return TranslationTarget(
+                code: direction.code,
+                languageName: direction.targetName,
+                sourceName: sourceName
+            )
+        }
+    }
+    
+    /// 换方向：把最后一张翻译卡片重跑一遍
+    func selectDirection(_ newDirection: TranslateDirection) {
+        guard direction != newDirection else { return }
+        direction = newDirection
+        UserDefaults.standard.set(newDirection.rawValue, forKey: directionKey)
+        
+        guard let index = messages.lastIndex(where: { $0.transformAction == .translate }),
+              let source = messages[index].transformSource
+        else { return }
+        
+        messages.remove(at: index)
+        // 连带丢掉它前面那条隐藏的原文消息
+        if index > 0, messages[index - 1].hidden {
+            messages.remove(at: index - 1)
+        }
+        runTransform(text: source, action: .translate)
+    }
+    
+    /// 替换选中文本：切回来源 App，用结果覆盖原文
+    func replaceSelection() {
+        guard let index = messages.lastIndex(where: { $0.transformAction != nil }) else { return }
+        let result = messages[index].content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !result.isEmpty else { return }
+        
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(result, forType: .string)
+        
+        Diagnostics.log("replace: 切回 \(lastSourceApp?.localizedName ?? "?") 并粘贴  长度=\(result.count)")
+        
+        // 面板让位，否则粘贴会打在 KoK 自己身上
+        onRequestHide?()
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self else { return }
+            self.lastSourceApp?.activate(options: [.activateIgnoringOtherApps])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                SelectionProvider.simulatePaste()
+            }
+        }
+    }
+    
+    // MARK: - 翻译历史
+    
+    func addToHistory(source: String, translated: String, engine: String) {
+        history.insert(TranslationRecord(sourceText: source, translatedText: translated, engineName: engine), at: 0)
+        if history.count > maxHistoryCount {
+            history = Array(history.prefix(maxHistoryCount))
+        }
+        saveHistory()
+    }
+    
+    func clearHistory() {
+        history.removeAll()
+        saveHistory()
+    }
+    
+    func translateFromHistory(_ record: TranslationRecord) {
+        runTransform(text: record.sourceText, action: .translate)
+    }
+    
+    private func saveHistory() {
+        if let data = try? JSONEncoder().encode(history) {
+            UserDefaults.standard.set(data, forKey: historyKey)
+        }
+    }
+    
+    private func loadHistory() {
+        if let data = UserDefaults.standard.data(forKey: historyKey),
+           let decoded = try? JSONDecoder().decode([TranslationRecord].self, from: data) {
+            history = decoded
+        }
+        if let saved = UserDefaults.standard.string(forKey: directionKey),
+           let stored = TranslateDirection(rawValue: saved) {
+            direction = stored
+        }
+    }
+    
+    /// 每次面板重新打开时调用（⌘2 / ⌘3 各自的开场由控制器决定）
+    func prepareForNewOpening() {
+        errorMessage = nil
+        voiceError = nil
+        context = nil
     }
     
     func send() {
@@ -423,6 +696,8 @@ final class ChatViewModel: ObservableObject {
     func stop() {
         streamTask?.cancel()
         streamTask = nil
+        transformTask?.cancel()
+        transformTask = nil
         imageGenTask?.cancel()
         imageGenTask = nil
         pendingGenerated = nil

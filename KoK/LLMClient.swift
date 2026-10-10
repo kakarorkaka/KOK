@@ -33,6 +33,17 @@ struct ChatMessage: Identifiable, Equatable {
     var role: Role
     var parts: [MessagePart]
     
+    /// 不渲染在时间线里（「变换卡片」的原文——它已经显示在卡片里了）
+    var hidden: Bool = false
+    /// 非空表示这是一张「变换卡片」：原文在上、结果在下，带复制 / 替换
+    var transformSource: String?
+    /// 变换用的动作（ChatAction 的 rawValue），决定卡片上显示什么操作
+    var transformActionId: String?
+    
+    var transformAction: ChatAction? {
+        transformActionId.flatMap { ChatAction(rawValue: $0) }
+    }
+    
     /// 纯文字部分拼起来（UI 展示、历史记录、提示词都读它）
     var content: String {
         parts.compactMap { part in
@@ -57,10 +68,20 @@ struct ChatMessage: Identifiable, Equatable {
         }
     }
     
-    init(id: UUID = UUID(), role: Role, parts: [MessagePart]) {
+    init(
+        id: UUID = UUID(),
+        role: Role,
+        parts: [MessagePart],
+        hidden: Bool = false,
+        transformSource: String? = nil,
+        transformActionId: String? = nil
+    ) {
         self.id = id
         self.role = role
         self.parts = parts
+        self.hidden = hidden
+        self.transformSource = transformSource
+        self.transformActionId = transformActionId
     }
     
     /// 纯文本便捷构造（翻译、连通性测试、系统提示词都走这里）

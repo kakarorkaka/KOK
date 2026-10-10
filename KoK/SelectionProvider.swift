@@ -132,27 +132,35 @@ enum SelectionProvider {
         return nil
     }
     
-    // MARK: - 模拟 ⌘C
+    // MARK: - 模拟 ⌘C / ⌘V
+
+    /// 模拟 ⌘V（替换选中文本用：把结果粘回原 App 的选区上）
+    static func simulatePaste() {
+        postCommand(key: 0x09)   // V
+    }
     
-    private static func postCopyCommand() {
+    private static func postCommand(key: CGKeyCode) {
         let source = CGEventSource(stateID: .hidSystemState)
         let cmdKey: CGKeyCode = 0x37
-        let cKey: CGKeyCode = 0x08
         
         guard let cmdDown = CGEvent(keyboardEventSource: source, virtualKey: cmdKey, keyDown: true),
-              let cDown = CGEvent(keyboardEventSource: source, virtualKey: cKey, keyDown: true),
-              let cUp = CGEvent(keyboardEventSource: source, virtualKey: cKey, keyDown: false),
+              let keyDown = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false),
               let cmdUp = CGEvent(keyboardEventSource: source, virtualKey: cmdKey, keyDown: false)
         else { return }
         
         cmdDown.flags = .maskCommand
-        cDown.flags = .maskCommand
-        cUp.flags = .maskCommand
+        keyDown.flags = .maskCommand
+        keyUp.flags = .maskCommand
         cmdUp.flags = []
         
         cmdDown.post(tap: .cghidEventTap)
-        cDown.post(tap: .cghidEventTap)
-        cUp.post(tap: .cghidEventTap)
+        keyDown.post(tap: .cghidEventTap)
+        keyUp.post(tap: .cghidEventTap)
         cmdUp.post(tap: .cghidEventTap)
+    }
+    
+    private static func postCopyCommand() {
+        postCommand(key: 0x08)   // C
     }
 }

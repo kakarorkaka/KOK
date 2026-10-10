@@ -31,6 +31,18 @@ struct GeneratedImage: Equatable {
     let height: Int
     let byteCount: Int
     
+    /// 从「结果历史」里恢复一张图（重启后接着看对话时需要）
+    static func fromStoredFile(named name: String, in directory: URL) -> GeneratedImage? {
+        let url = directory.appendingPathComponent(name)
+        guard let data = try? Data(contentsOf: url), !data.isEmpty else { return nil }
+        var width = 0, height = 0
+        if let rep = NSBitmapImageRep(data: data) {
+            width = rep.pixelsWide
+            height = rep.pixelsHigh
+        }
+        return GeneratedImage(fileURL: url, width: width, height: height, byteCount: data.count)
+    }
+    
     var dimensionText: String { "\(width)×\(height)" }
     
     var sizeText: String {
@@ -155,10 +167,11 @@ final class ImageGenerationService {
         let (imageData, _) = try await imageGenSession.data(from: imageURL)
         guard !imageData.isEmpty else { throw ServiceError.emptyResponse("生图服务") }
         
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("KoK-gen", isDirectory: true)
+        // 存到「结果历史」的图片目录（Application Support），而不是临时目录：
+        // 生成结果是会回看 / 复用的产出，临时目录会被系统清理掉
+        let dir = ResultStore.shared.imagesDirectory
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let fileURL = dir.appendingPathComponent("\(UUID().uuidString).png")
+        let fileURL = dir.appendingPathComponent(ResultStore.shared.newImageFileName())
         try imageData.write(to: fileURL)
         
         var width = 0, height = 0

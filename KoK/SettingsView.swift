@@ -37,6 +37,7 @@ struct GeneralSettingsTab: View {
     @AppStorage("image_gen_url") private var imageGenURL = ImageGenerationService.defaultURL
     @AppStorage("image_gen_api_key") private var imageGenAPIKey = ""
     @AppStorage("image_gen_model") private var imageGenModel = ImageGenerationService.defaultModel
+    @AppStorage("keep_conversation") private var keepConversation = false
     
     @State private var launchAtLogin: Bool = {
         if #available(macOS 13.0, *) {
@@ -139,6 +140,22 @@ struct GeneralSettingsTab: View {
                             }
                         }
                     }
+            }
+            
+            Section {
+                Toggle("退出后保留当前对话", isOn: $keepConversation)
+                    .onChange(of: keepConversation) { _, newValue in
+                        if !newValue {
+                            ConversationStore.shared.delete()
+                        }
+                    }
+            } header: {
+                Text("对话")
+            } footer: {
+                Text("默认关闭：对话只存在内存里，退出即消失。\n"
+                     + "打开后，当前对话（文字与生成结果）会存在 ~/Library/Application Support/KoK/，"
+                     + "下次启动自动恢复；点「新对话」或关掉这个开关都会删除。"
+                     + "截图 / 参考图不会被保存。")
             }
         }
         .formStyle(.grouped)

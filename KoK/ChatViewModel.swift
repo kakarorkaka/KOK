@@ -116,12 +116,28 @@ final class ChatViewModel: ObservableObject {
             .sink { [weak self] in self?.objectWillChange.send() }
             .store(in: &cancellables)
         
+        // 结果历史的变化同样要转发给视图（工具栏的历史按钮、弹窗）
+        resultStore.objectWillChange
+            .sink { [weak self] in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        
+        // 消息有变化就按需落盘（开关关着时是空操作）
+        $messages
+            .dropFirst()
+            .sink { [weak self] _ in self?.scheduleConversationSave() }
+            .store(in: &cancellables)
+        
         if let saved = UserDefaults.standard.string(forKey: "image_gen_size"),
            let size = ImageGenSize(rawValue: saved) {
             imageSize = size
         }
         
-        loadHistory()
+        if let saved = UserDefaults.standard.string(forKey: directionKey),
+           let stored = TranslateDirection(rawValue: saved) {
+            direction = stored
+        }
+        
+        restoreConversationIfEnabled()
     }
     
     func selectImageSize(_ size: ImageGenSize) {
@@ -138,6 +154,8 @@ final class ChatViewModel: ObservableObject {
     /// 生图完成但流还没结束时先挂在这里，流结束后再贴到消息上
     private var pendingGenerated: GeneratedImage?
     private var pendingForId: UUID?
+    /// 自动路由生图时的提示词（进结果历史用）
+    private var pendingImagePrompt: String?
     private var streamFinished = false
     /// 每条流式请求的标识：被取消的旧任务不允许再改新请求的状态
     private var activeStreamId: UUID?
@@ -149,8 +167,10 @@ final class ChatViewModel: ObservableObject {
     
     /// 翻译方向（只在「翻译」动作下出现）
     @Published var direction: TranslateDirection = .auto
-    /// 翻译历史
-    @Published var history: [TranslationRecord] = []
+    
+    /// 结果历史（翻译 / 总结 / 润色 / 生图）。真正的存储与淘汰策略在 ResultStore。
+    let resultStore = ResultStore.shared
+    var history: [ResultStore.Record] { resultStore.records }
     
     private let translationService = UnifiedTranslationService()
     private var transformTask: Task<Void, Never>?
@@ -159,9 +179,12 @@ final class ChatViewModel: ObservableObject {
     private var runningTransformCardId: UUID?
     /// 最近一次抓取时的来源 App（「替换」时切回它再粘贴）
     private var lastSourceApp: NSRunningApplication?
-    private let historyKey = "translation_history"
     private let directionKey = "translation_direction"
-    private let maxHistoryCount = 50
+    
+    /// 可选的对话持久化（默认关；开关在设置 ▸ 通用）
+    private let conversationStore = ConversationStore.shared
+    private static let keepConversationKey = "keep_conversation"
+    private var conversationSaveTask: Task<Void, Never>?
     
     var selectedEngineName: String {
         activeAction.usesTranslationPath
@@ -343,11 +366,12 @@ final class ChatViewModel: ObservableObject {
                     return
                 }
                 
-                // 只有翻译进历史；总结 / 润色不污染翻译历史
-                if action.usesTranslationPath, !Task.isCancelled {
-                    self.addToHistory(
+                // 三种零输入动作的结果都进「结果历史」，方便回看与复用
+                if !Task.isCancelled {
+                    self.addResult(
+                        kind: Self.resultKind(for: action),
                         source: text,
-                        translated: self.content(of: cardId).trimmingCharacters(in: .whitespacesAndNewlines),
+                        output: self.content(of: cardId).trimmingCharacters(in: .whitespacesAndNewlines),
                         engine: config.name
                     )
                 }
@@ -461,40 +485,131 @@ final class ChatViewModel: ObservableObject {
         }
     }
     
-    // MARK: - 翻译历史
+    // MARK: - 结果历史（翻译 / 总结 / 润色 / 生图）
     
-    func addToHistory(source: String, translated: String, engine: String) {
-        history.insert(TranslationRecord(sourceText: source, translatedText: translated, engineName: engine), at: 0)
-        if history.count > maxHistoryCount {
-            history = Array(history.prefix(maxHistoryCount))
-        }
-        saveHistory()
+    /// 记一条结果。`imageFile` 只有生图结果才有（images/ 下的文件名）。
+    func addResult(kind: ResultStore.Kind, source: String, output: String, engine: String, imageFile: String? = nil) {
+        resultStore.add(
+            ResultStore.Record(
+                id: UUID(),
+                kind: kind,
+                sourceText: source,
+                outputText: output,
+                engineName: engine,
+                timestamp: Date(),
+                imageFile: imageFile
+            )
+        )
     }
     
     func clearHistory() {
-        history.removeAll()
-        saveHistory()
+        resultStore.clear()
     }
     
-    func translateFromHistory(_ record: TranslationRecord) {
-        runTransform(text: record.sourceText, action: .translate)
+    func deleteHistoryRecord(_ id: UUID) {
+        resultStore.delete(id)
     }
     
-    private func saveHistory() {
-        if let data = try? JSONEncoder().encode(history) {
-            UserDefaults.standard.set(data, forKey: historyKey)
+    /// 点击历史条目：文字结果重新跑一遍对应动作
+    func reuseHistoryRecord(_ record: ResultStore.Record) {
+        guard !record.sourceText.isEmpty else { return }
+        runTransform(text: record.sourceText, action: action(for: record.kind))
+    }
+    
+    /// 历史条目对应的动作（生图没有零输入动作，点了只能复制/打开）
+    private func action(for kind: ResultStore.Kind) -> ChatAction {
+        switch kind {
+        case .translate: return .translate
+        case .summarize: return .summarize
+        case .polish: return .polish
+        case .image: return .chat
         }
     }
     
-    private func loadHistory() {
-        if let data = UserDefaults.standard.data(forKey: historyKey),
-           let decoded = try? JSONDecoder().decode([TranslationRecord].self, from: data) {
-            history = decoded
+    /// ChatAction → 历史记录类型
+    private static func resultKind(for action: ChatAction) -> ResultStore.Kind {
+        switch action {
+        case .translate: return .translate
+        case .summarize: return .summarize
+        case .polish: return .polish
+        case .chat: return .summarize
         }
-        if let saved = UserDefaults.standard.string(forKey: directionKey),
-           let stored = TranslateDirection(rawValue: saved) {
-            direction = stored
+    }
+    
+    func copyHistoryRecord(_ record: ResultStore.Record) {
+        let text = record.outputText.isEmpty ? record.sourceText : record.outputText
+        copy(text)
+    }
+    
+    // MARK: - 可选的对话持久化（默认关，开关在设置 ▸ 通用）
+    
+    var keepsConversation: Bool {
+        UserDefaults.standard.bool(forKey: Self.keepConversationKey)
+    }
+    
+    /// 消息变化后延迟保存：流式输出每来一段都会触发，抖一下再写盘
+    private func scheduleConversationSave() {
+        guard keepsConversation else { return }
+        conversationSaveTask?.cancel()
+        conversationSaveTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.conversationStore.save(self.messages.compactMap(Self.storableMessage))
         }
+    }
+    
+    /// ChatMessage → 可落盘的形态。刻意丢掉输入图片（截图/参考图）
+    private static func storableMessage(_ message: ChatMessage) -> ConversationStore.StoredMessage? {
+        let text = message.content
+        let imageFile = message.parts.compactMap { part -> String? in
+            if case .generatedImage(let image) = part { return image.fileURL.lastPathComponent }
+            return nil
+        }.first
+        
+        // 全空的消息没必要存
+        guard !text.isEmpty || imageFile != nil else { return nil }
+        
+        return ConversationStore.StoredMessage(
+            role: message.role.rawValue,
+            text: text,
+            hidden: message.hidden,
+            transformSource: message.transformSource,
+            transformActionId: message.transformActionId,
+            generatedImageFile: imageFile
+        )
+    }
+    
+    private func restoreConversationIfEnabled() {
+        guard keepsConversation else { return }
+        let stored = conversationStore.load()
+        guard !stored.isEmpty else { return }
+        
+        messages = stored.compactMap { item -> ChatMessage? in
+            guard let role = ChatMessage.Role(rawValue: item.role) else { return nil }
+            var parts: [MessagePart] = []
+            if let file = item.generatedImageFile,
+               let image = GeneratedImage.fromStoredFile(named: file, in: resultStore.imagesDirectory) {
+                parts.append(.generatedImage(image))
+            }
+            if !item.text.isEmpty {
+                parts.append(.text(item.text))
+            }
+            guard !parts.isEmpty else { return nil }
+            return ChatMessage(
+                role: role,
+                parts: parts,
+                hidden: item.hidden,
+                transformSource: item.transformSource,
+                transformActionId: item.transformActionId
+            )
+        }
+        Diagnostics.log("conversation: 已恢复 \(messages.count) 条消息")
+    }
+    
+    /// 删除已保存的对话（点「新对话」或关掉开关时调用）
+    func discardSavedConversation() {
+        conversationSaveTask?.cancel()
+        conversationStore.delete()
     }
     
     /// 每次面板重新打开时调用（⌘2 / ⌘3 各自的开场由控制器决定）
@@ -738,7 +853,7 @@ final class ChatViewModel: ObservableObject {
                     size: self.imageSize.sizeParam
                 )
                 guard !Task.isCancelled else { return }
-                self.attachGeneratedImage(result, to: placeholderId)
+                self.attachGeneratedImage(result, to: placeholderId, prompt: prompt)
                 self.retryable = nil
             } catch {
                 if !Task.isCancelled {
@@ -752,12 +867,19 @@ final class ChatViewModel: ObservableObject {
     }
     
     /// 把生成结果贴到占位消息上；占位已被清掉时单独发一条
-    private func attachGeneratedImage(_ image: GeneratedImage, to id: UUID) {
+    private func attachGeneratedImage(_ image: GeneratedImage, to id: UUID, prompt: String) {
         if let index = messages.firstIndex(where: { $0.id == id }) {
             messages[index].parts.append(.generatedImage(image))
         } else {
             messages.append(ChatMessage(role: .assistant, parts: [.generatedImage(image)]))
         }
+        addResult(
+            kind: .image,
+            source: prompt,
+            output: "",
+            engine: engineManager.imageGenModel,
+            imageFile: image.fileURL.lastPathComponent
+        )
         Diagnostics.log("imagegen: 图片已贴到消息  \(image.dimensionText) \(image.sizeText)")
     }
     
@@ -836,6 +958,7 @@ final class ChatViewModel: ObservableObject {
         messages.removeAll()
         errorMessage = nil
         retryable = nil
+        discardSavedConversation()
     }
     
     func copy(_ text: String) {
@@ -1029,6 +1152,7 @@ final class ChatViewModel: ObservableObject {
                 )
                 self.pendingGenerated = result
                 self.pendingForId = placeholderId
+                self.pendingImagePrompt = prompt
                 self.flushPendingIfReady()
             } catch {
                 if !Task.isCancelled {
@@ -1049,6 +1173,14 @@ final class ChatViewModel: ObservableObject {
         } else {
             messages.append(ChatMessage(role: .assistant, parts: [.generatedImage(image)]))
         }
+        addResult(
+            kind: .image,
+            source: pendingImagePrompt ?? "",
+            output: "",
+            engine: engineManager.imageGenModel,
+            imageFile: image.fileURL.lastPathComponent
+        )
+        pendingImagePrompt = nil
         Diagnostics.log("auto-gen: 图片已贴到消息  \(image.dimensionText) \(image.sizeText)")
     }
 

@@ -14,6 +14,7 @@ struct ChatView: View {
     
     /// 空状态里显示真实快捷键（用户可能在设置里改过）
     @ObservedObject private var hotKeys = HotKeyManager.shared
+    @AppStorage("keep_conversation") private var keepConversation = false
     
     @FocusState private var inputFocused: Bool
     @State private var dragOffset: CGPoint?
@@ -305,7 +306,9 @@ struct ChatView: View {
                 Text("· 顶部胶囊切换处理方式：翻译 / 总结 / 润色，或直接问它")
                 Text("· \(chatShortcutText) 打开这个面板；按住同一个键说话")
                 Text("· 选中图片或 \(screenshotShortcutText) 截图，可以贴进上下文")
-                Text("· 对话只存在内存里，点右上角图标即可开始新对话")
+                Text(keepConversation
+                     ? "· 对话会保存在本机，退出后可恢复（设置里可关）"
+                     : "· 对话只存在内存里，点右上角图标即可开始新对话")
             }
             .font(.caption)
             .foregroundColor(.secondary)
@@ -1118,8 +1121,11 @@ struct HistoryPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("翻译历史")
+                Text("结果历史")
                     .font(.headline)
+                Text("翻译 / 总结 / 润色 / 生图")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
                 Spacer()
                 if !viewModel.history.isEmpty {
                     Button("清空") {
@@ -1138,9 +1144,12 @@ struct HistoryPopover: View {
             if viewModel.history.isEmpty {
                 VStack {
                     Spacer()
-                    Text("暂无翻译记录")
+                    Text("还没有结果")
                         .foregroundColor(.secondary)
                         .font(.caption)
+                    Text("处理过的内容会自动留在这里")
+                        .foregroundColor(.secondary)
+                        .font(.caption2)
                     Spacer()
                 }
                 .frame(maxWidth: .infinity)
@@ -1148,41 +1157,105 @@ struct HistoryPopover: View {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(viewModel.history) { record in
-                            Button(action: {
-                                viewModel.translateFromHistory(record)
+                            HistoryRow(record: record, viewModel: viewModel) {
                                 isPresented = false
-                            }) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(record.sourceText)
-                                        .font(.system(size: 12))
-                                        .lineLimit(1)
-                                        .foregroundColor(.primary)
-                                    Text(record.translatedText)
-                                        .font(.system(size: 11))
-                                        .lineLimit(1)
-                                        .foregroundColor(.secondary)
-                                    HStack {
-                                        Text(record.engineName)
-                                            .font(.caption2)
-                                            .foregroundColor(.blue)
-                                        Spacer()
-                                        Text(record.timestamp, style: .relative)
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                    }
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                                .contentShape(Rectangle())
                             }
-                            .buttonStyle(.plain)
-                            
                             Divider().padding(.leading, 12)
                         }
                     }
                 }
             }
         }
-        .frame(width: 320, height: 300)
+        .frame(width: 340, height: 320)
+    }
+}
+
+/// 一条结果：点一下「重用」（文字结果重新跑一遍）；右键或按钮可复制 / 删除
+struct HistoryRow: View {
+    let record: ResultStore.Record
+    @ObservedObject var viewModel: ChatViewModel
+    let onDismiss: () -> Void
+    
+    @State private var copied = false
+    
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: record.kind.icon)
+                .font(.system(size: 11))
+                .foregroundColor(.accentColor)
+                .frame(width: 14)
+                .padding(.top, 2)
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text(record.sourceText.isEmpty ? "（无原文）" : record.sourceText)
+                    .font(.system(size: 12))
+                    .lineLimit(1)
+                    .foregroundColor(.primary)
+                
+                if record.isImage {
+                    Text("点击预览 · 右键可在访达中显示")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                } else {
+                    Text(record.outputText)
+                        .font(.system(size: 11))
+                        .lineLimit(1)
+                        .foregroundColor(.secondary)
+                }
+                
+                HStack(spacing: 6) {
+                    Text(record.kind.title)
+                        .font(.caption2)
+                        .foregroundColor(.accentColor)
+                    Text(record.engineName)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                    Spacer()
+                    Text(record.timestamp, style: .relative)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                openRecord()
+            }
+            
+            Button {
+                viewModel.copyHistoryRecord(record)
+                copied = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copied = false }
+            } label: {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 11))
+                    .foregroundColor(copied ? .green : .secondary)
+            }
+            .buttonStyle(.plain)
+            .help("复制结果")
+            
+            Button {
+                viewModel.deleteHistoryRecord(record.id)
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("删除这条")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+    
+    /// 文字结果：重新跑一遍；生图结果：打开原图
+    private func openRecord() {
+        if record.isImage {
+            guard let url = viewModel.resultStore.imageURL(for: record) else { return }
+            NSWorkspace.shared.open(url)
+        } else {
+            viewModel.reuseHistoryRecord(record)
+            onDismiss()
+        }
     }
 }

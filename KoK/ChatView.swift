@@ -12,9 +12,18 @@ struct ChatView: View {
     @ObservedObject var viewModel: ChatViewModel
     var onDismiss: (() -> Void)?
     
+    /// 空状态里显示真实快捷键（用户可能在设置里改过）
+    @ObservedObject private var hotKeys = HotKeyManager.shared
+    
     @FocusState private var inputFocused: Bool
     @State private var dragOffset: CGPoint?
     @State private var showingHistory = false
+    /// 用户是否停在底部：不在底部时不要把他拽回去（流式输出期间尤其重要）
+    @State private var isAtBottom = true
+    @State private var lastMessageCount = 0
+    /// 打字自动切动作时的一行提示
+    @State private var actionHint: String?
+    @State private var hintTask: Task<Void, Never>?
     
     private let bottomAnchor = "chat-bottom"
     
@@ -23,6 +32,15 @@ struct ChatView: View {
             toolbar
             Divider()
             actionCapsules
+            if let actionHint {
+                Text(actionHint)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 6)
+                    .transition(.opacity)
+            }
             transcript
             if let error = viewModel.errorMessage {
                 Divider()
@@ -50,9 +68,10 @@ struct ChatView: View {
         .onAppear { focusInput() }
         .onChange(of: viewModel.focusRequest) { _, _ in focusInput() }
         .onChange(of: viewModel.input) { _, newValue in
-            // 开始打字 = 在追问：胶囊自动回到「问答」，行为自解释
+            // 开始打字 = 在追问：胶囊自动回到「问答」，并给一行提示免得用户困惑
             if !newValue.isEmpty, viewModel.activeAction != .chat {
                 viewModel.activeAction = .chat
+                showActionHint("已切到「问答」· 想继续上面的处理，点上方胶囊即可")
             }
         }
         .overlay {
@@ -76,26 +95,19 @@ struct ChatView: View {
                 directionMenu
             }
             
-            if viewModel.copyFeedback {
-                Text("已复制")
-                    .font(.caption2)
-                    .foregroundColor(.green)
-                    .transition(.opacity)
-            }
-            
             Spacer()
             
-            if !viewModel.history.isEmpty {
-                Button { showingHistory.toggle() } label: {
-                    Image(systemName: "clock.arrow.circlepath")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("翻译历史")
-                .popover(isPresented: $showingHistory) {
-                    HistoryPopover(viewModel: viewModel, isPresented: $showingHistory)
-                }
+            // 历史按钮常驻（没记录时禁用），避免工具栏按钮左右跳动
+            Button { showingHistory.toggle() } label: {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .disabled(viewModel.history.isEmpty)
+            .help(viewModel.history.isEmpty ? "暂无翻译历史" : "翻译历史")
+            .popover(isPresented: $showingHistory) {
+                HistoryPopover(viewModel: viewModel, isPresented: $showingHistory)
             }
             
             if viewModel.isStreaming || viewModel.isGeneratingImage {
@@ -243,7 +255,9 @@ struct ChatView: View {
                     ForEach(Array(visibleMessages.enumerated()), id: \.element.id) { index, message in
                         MessageRow(
                             message: message,
-                            isStreaming: viewModel.isStreaming,
+                            // 只有「正在流式的那一条」才算流式：否则一有请求在跑，
+                            // 历史消息上的复制 / 替换按钮会全部消失
+                            isStreaming: viewModel.isStreaming && index == visibleMessages.count - 1,
                             isGeneratingImage: viewModel.isGeneratingImage,
                             // 只有最后一条才显示「正在生成图片」：文字已经流完了，
                             // 不提示的话用户会以为这句话就到此为止
@@ -259,7 +273,18 @@ struct ChatView: View {
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .onChange(of: viewModel.messages) { _, _ in
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                // 距底部 40pt 以内算「贴着底」
+                geometry.contentSize.height - geometry.contentOffset.y - geometry.containerSize.height < 40
+            } action: { _, atBottom in
+                isAtBottom = atBottom
+            }
+            .onChange(of: viewModel.messages) { _, newValue in
+                // 新消息一律跟到底；流式追加时只在用户本来就贴底的情况下跟随，
+                // 免得用户往上翻看历史时被一次次拽回来
+                let isNewMessage = newValue.count != lastMessageCount
+                lastMessageCount = newValue.count
+                guard isAtBottom || isNewMessage else { return }
                 withAnimation(.easeOut(duration: 0.12)) {
                     proxy.scrollTo(bottomAnchor, anchor: .bottom)
                 }
@@ -273,15 +298,32 @@ struct ChatView: View {
     }
     
     private var emptyHint: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("问点什么")
+        VStack(alignment: .leading, spacing: 8) {
+            Text("选中文字，按 \(translateShortcutText) 直接处理")
                 .font(.system(size: 13, weight: .medium))
-            Text("直接输入问题，回车发送。对话只保存在内存中，点右上角图标即可开始新对话。")
-                .font(.caption)
-                .foregroundColor(.secondary)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("· 顶部胶囊切换处理方式：翻译 / 总结 / 润色，或直接问它")
+                Text("· \(chatShortcutText) 打开这个面板；按住同一个键说话")
+                Text("· 选中图片或 \(screenshotShortcutText) 截图，可以贴进上下文")
+                Text("· 对话只存在内存里，点右上角图标即可开始新对话")
+            }
+            .font(.caption)
+            .foregroundColor(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 8)
+    }
+    
+    private var translateShortcutText: String {
+        hotKeys.shortcut(for: .translate)?.displayString ?? "⌘2"
+    }
+    
+    private var chatShortcutText: String {
+        hotKeys.shortcut(for: .chat)?.displayString ?? "⌘3"
+    }
+    
+    private var screenshotShortcutText: String {
+        hotKeys.shortcut(for: .screenshot)?.displayString ?? "⌥C"
     }
     
     // MARK: - 错误条
@@ -491,6 +533,17 @@ struct ChatView: View {
             inputFocused = true
         }
     }
+    
+    /// 短暂显示一行提示（自动切动作时用），3 秒后淡出
+    private func showActionHint(_ text: String) {
+        hintTask?.cancel()
+        withAnimation(.easeInOut(duration: 0.15)) { actionHint = text }
+        hintTask = Task {
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.2)) { actionHint = nil }
+        }
+    }
 }
 
 // MARK: - 单条消息
@@ -504,6 +557,11 @@ struct MessageRow: View {
     let onCopy: (String) -> Void
     let onPreview: (ImageAttachment) -> Void
     let onReplace: () -> Void
+    
+    /// 就地反馈：点哪个按钮就在哪个按钮上显示「已复制」
+    @State private var copied = false
+    /// 变换卡片的原文默认折叠 3 行，长文本可展开
+    @State private var sourceExpanded = false
     
     var body: some View {
         switch message.role {
@@ -551,6 +609,24 @@ struct MessageRow: View {
     
     // MARK: - 变换卡片（原文 → 结果，带复制 / 替换）
     
+    /// 就地反馈的复制按钮：点哪个就在哪个上显示「已复制」
+    private func copyButton(_ text: String) -> some View {
+        Button {
+            onCopy(text)
+            copied = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                copied = false
+            }
+        } label: {
+            Label(copied ? "已复制" : "复制",
+                  systemImage: copied ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 11))
+        }
+        .buttonStyle(.plain)
+        .foregroundColor(copied ? .green : .secondary)
+        .animation(.easeInOut(duration: 0.15), value: copied)
+    }
+    
     private var transformCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
@@ -563,17 +639,29 @@ struct MessageRow: View {
             .foregroundColor(.secondary)
             
             if let source = message.transformSource {
-                Text(source)
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-                    .lineLimit(3)
-                    .textSelection(.enabled)
-                    .padding(.leading, 8)
-                    .overlay(alignment: .leading) {
-                        Rectangle()
-                            .fill(Color.secondary.opacity(0.3))
-                            .frame(width: 2)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(source)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                        .lineLimit(sourceExpanded ? nil : 3)
+                        .textSelection(.enabled)
+                        .padding(.leading, 8)
+                        .overlay(alignment: .leading) {
+                            Rectangle()
+                                .fill(Color.secondary.opacity(0.3))
+                                .frame(width: 2)
+                        }
+                    
+                    if source.count > 120 {
+                        Button(sourceExpanded ? "收起" : "展开原文") {
+                            withAnimation(.easeInOut(duration: 0.15)) { sourceExpanded.toggle() }
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10))
+                        .foregroundColor(.accentColor)
+                        .padding(.leading, 8)
                     }
+                }
             }
             
             if message.content.isEmpty {
@@ -592,12 +680,7 @@ struct MessageRow: View {
                     HStack(spacing: 14) {
                         Spacer(minLength: 0)
                         
-                        Button { onCopy(message.content) } label: {
-                            Label("复制", systemImage: "doc.on.doc")
-                                .font(.system(size: 11))
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundColor(.secondary)
+                        copyButton(message.content)
                         
                         Button { onReplace() } label: {
                             Label("替换", systemImage: "arrow.triangle.2.circlepath")
@@ -636,12 +719,7 @@ struct MessageRow: View {
                         MarkdownText(raw: message.content)
                         
                         if !isStreaming {
-                            Button { onCopy(message.content) } label: {
-                                Label("复制", systemImage: "doc.on.doc")
-                                    .font(.system(size: 11))
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundColor(.secondary)
+                            copyButton(message.content)
                         }
                     }
                     

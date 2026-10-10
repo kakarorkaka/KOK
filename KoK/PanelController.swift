@@ -94,10 +94,17 @@ class PanelController: NSObject, NSWindowDelegate {
     /// - Parameter activate: 是否把 App 提到前台。语音场景要传 false——
     ///   一旦抢走焦点，模拟 ⌘C 就抓不到原来那个 App 里选中的内容了。
     func showWindow(activate: Bool = true, makeKey: Bool = true) {
-        guard let panel = panel, let screen = NSScreen.main else { return }
+        guard let panel = panel else { return }
         onWillShow?()
         
         let mouseLoc = NSEvent.mouseLocation
+        // 用「鼠标所在的那块屏幕」，而不是 NSScreen.main。
+        // NSScreen.main 是「有 key window 的那块屏」，多显示器下常常不是鼠标这块：
+        // 拿错屏幕的 visibleFrame 做边界修正，面板会被推到另一块屏幕上，
+        // 用户看着自己这块屏只会觉得「按了没反应」。
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(mouseLoc) })
+                ?? NSScreen.main
+        else { return }
         let screenFrame = screen.visibleFrame
         let panelWidth = panel.frame.width
         let panelHeight = max(panel.frame.height, minimumSize.height)
@@ -134,6 +141,7 @@ class PanelController: NSObject, NSWindowDelegate {
         saveSize()
         panel?.orderOut(nil)
         stopMonitors()
+        Diagnostics.log("panel: 隐藏（\(persistenceKey)）")
     }
     
     func toggle() {

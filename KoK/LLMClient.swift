@@ -82,6 +82,22 @@ struct ChatMessage: Identifiable, Equatable {
 
 class LLMClient {
     
+    /// 专用会话，给请求加上明确的超时。
+    ///
+    /// 之前用 `URLSession.shared`（默认 `timeoutIntervalForRequest = 60`）：
+    /// 机器睡一觉醒来后 socket 其实已经死了、URLSession 却未必察觉，
+    /// 请求会一直挂着——面板永远停在「Thinking…」、`isStreaming` 一直是 true，
+    /// 发送按钮就再也点不动了。这里显式设超时兜底（App 侧另有看门狗）。
+    private let session: URLSession = {
+        let config = URLSessionConfiguration.default
+        // 等「下一份数据」的上限：流式输出期间每来一段就重新计时
+        config.timeoutIntervalForRequest = 180
+        // 整个请求的上限：留足长回答的余量
+        config.timeoutIntervalForResource = 900
+        config.waitsForConnectivity = false
+        return URLSession(configuration: config)
+    }()
+    
     /// 流式请求：逐段产出模型回复。翻译与对话共用。
     ///
     /// 若首个请求就失败（例如服务端不支持 `stream`），且尚未产出任何内容，
@@ -161,7 +177,7 @@ class LLMClient {
             throw ServiceError.unsupportedEngine(config.name)
         }
         
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        let (bytes, response) = try await session.bytes(for: request)
         
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
             var detail = ""
@@ -346,7 +362,7 @@ class LLMClient {
     // MARK: - 响应解析
     
     private func send(_ request: URLRequest, engine: String) async throws -> Data {
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
             let detail = String(data: data, encoding: .utf8) ?? "未知错误"
             throw ServiceError.apiError(engine, String(detail.prefix(300)))

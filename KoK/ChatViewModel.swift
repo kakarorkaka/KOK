@@ -443,6 +443,13 @@ final class ChatViewModel: ObservableObject {
     
     // MARK: - 流式
     
+    /// 看门狗：这么久没收到任何新内容就认为请求已经死了。
+    /// 机器睡眠/换网之后 socket 可能悄悄失效，请求会一直挂着不报错——
+    /// 结果是面板永远停在「Thinking…」、发送按钮永久禁用（实测遇到过）。
+    private static let streamStallTimeout: TimeInterval = 90
+    /// 最近一次收到流内容的时间
+    private var lastStreamActivity = Date()
+    
     private func startStreaming(using config: EngineConfig) {
         // 先组装请求再插入占位消息，否则空回答也会被发给模型
         let payload = buildPayload()
@@ -450,13 +457,30 @@ final class ChatViewModel: ObservableObject {
         let placeholderId = messages[messages.count - 1].id
         isStreaming = true
         streamFinished = false
+        lastStreamActivity = Date()
         let streamId = UUID()
         activeStreamId = streamId
 
         // 参考图取上下文里最近的一张（刚发出的用户消息里若有图，就是它）
         let reference = latestReferenceImage()
 
+        // 看门狗：定期检查有没有新内容，卡住就中止并给出可重试的错误
+        let watchdog = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard !Task.isCancelled, let self else { return }
+                guard self.isStreaming, self.activeStreamId == streamId else { return }
+                let idle = Date().timeIntervalSince(self.lastStreamActivity)
+                guard idle > Self.streamStallTimeout else { continue }
+                Diagnostics.log("stream: 看门狗超时 \(Int(idle))s 无响应，中止本次请求")
+                self.errorMessage = "模型服务 \(Int(Self.streamStallTimeout)) 秒没有响应，已中止这次请求。可以点「重试」，或换个引擎。"
+                self.streamTask?.cancel()
+                return
+            }
+        }
+
         streamTask = Task { [weak self] in
+            defer { watchdog.cancel() }
             guard let self else { return }
             var received = false
             var buffer = ""
@@ -467,6 +491,7 @@ final class ChatViewModel: ObservableObject {
                 for try await chunk in self.service.stream(messages: payload, using: config) {
                     if Task.isCancelled { break }
                     received = true
+                    self.lastStreamActivity = Date()
                     buffer += chunk
 
                     // 展示部分：把标记块从流里剥掉，只吐出干净文字

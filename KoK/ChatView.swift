@@ -11,8 +11,6 @@ import UniformTypeIdentifiers
 struct ChatView: View {
     @ObservedObject var viewModel: ChatViewModel
     var onDismiss: (() -> Void)?
-    /// 内容高度变化（面板据此自适应高度：只有一张卡片时保持紧凑）
-    var onContentHeightChange: ((CGFloat) -> Void)?
     
     @FocusState private var inputFocused: Bool
     @State private var dragOffset: CGPoint?
@@ -57,17 +55,13 @@ struct ChatView: View {
                 viewModel.activeAction = .chat
             }
         }
-        .onPreferenceChange(ViewHeightKey.self) { contentHeight in
-            // 工具栏 45 + 胶囊行 34 + 输入区 52 ≈ 131
-            onContentHeightChange?(contentHeight + 131)
-        }
         .overlay {
             if let image = viewModel.previewImage {
                 ImagePreviewOverlay(image: image) { viewModel.closePreview() }
             }
         }
     }
-    
+        
     // MARK: - 工具栏
     
     private var toolbar: some View {
@@ -264,9 +258,6 @@ struct ChatView: View {
                 }
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(GeometryReader { geometry in
-                    Color.clear.preference(key: ViewHeightKey.self, value: geometry.size.height)
-                })
             }
             .onChange(of: viewModel.messages) { _, _ in
                 withAnimation(.easeOut(duration: 0.12)) {
@@ -1037,15 +1028,6 @@ struct GeneratedImageView: View {
             guard response == .OK, let url = panel.url else { return }
             try? data.write(to: url)
         }
-    }
-}
-
-// MARK: - 内容高度测量（面板自适应高度用）
-
-struct ViewHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
     }
 }
 

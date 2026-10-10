@@ -27,11 +27,6 @@ final class ChatPanelController: PanelController {
     override var minimumSize: NSSize { NSSize(width: 360, height: 260) }
     override var maximumSize: NSSize { NSSize(width: 1000, height: 1000) }
     
-    /// 自适应高度的下限：再紧凑也要留出「一张卡片 + 输入栏」的余量
-    private static let minAutoHeight: CGFloat = 260
-    /// 内容高度还没测出来时的开场高度
-    private static let defaultHeight: CGFloat = 420
-    
     /// 点按与按住的分界。快速点按通常 50–150ms，刻意按住一般超过 250ms。
     private static let holdThreshold: TimeInterval = 0.18
     
@@ -41,20 +36,8 @@ final class ChatPanelController: PanelController {
     private var holdTask: Task<Void, Never>?
     private var isHolding = false
     
-    /// 自适应高度的上限 = 用户手动拖到过的最大高度
-    private var heightLimit: CGFloat = 560
-    /// 最近一次由内容驱动的目标高度（用来区分「自动变高」和「用户拖动」）
-    private var lastAppliedHeight: CGFloat?
-    private var lastContentHeight: CGFloat?
-    
-    private static let heightLimitKey = "panel_height_limit_chat"
-    
     private override init() {
         super.init()
-        if let stored = UserDefaults.standard.object(forKey: Self.heightLimitKey) as? Double {
-            heightLimit = CGFloat(stored)
-        }
-        heightLimit = max(heightLimit, Self.minAutoHeight)
         setupPanel()
     }
     
@@ -64,9 +47,6 @@ final class ChatPanelController: PanelController {
         var contentView = ChatView(viewModel: viewModel)
         contentView.onDismiss = { [weak self] in
             self?.hideWindow()
-        }
-        contentView.onContentHeightChange = { [weak self] height in
-            self?.applyContentHeight(height)
         }
         installContent(contentView)
         
@@ -164,65 +144,5 @@ final class ChatPanelController: PanelController {
     /// 框选屏幕区域作为上下文。截图期间不显示面板，免得被截进去。
     func captureScreenshot() {
         viewModel.captureScreenshot()
-    }
-    
-    // MARK: - 内容自适应高度
-    
-    /// 视图报上来的自然高度：窗口高度 = clamp(内容高度, 最小, 用户拖到过的上限)
-    private func applyContentHeight(_ contentHeight: CGFloat) {
-        lastContentHeight = contentHeight
-        guard let panel, panel.isVisible else { return }
-        resizeToFit(contentHeight: contentHeight, animate: true)
-    }
-    
-    private func resizeToFit(contentHeight: CGFloat, animate: Bool) {
-        guard let panel else { return }
-        let target = max(Self.minAutoHeight, min(contentHeight.rounded(), heightLimit))
-        guard abs(panel.frame.height - target) > 2 else { return }
-        
-        var frame = panel.frame
-        let top = frame.maxY
-        frame.size.height = target
-        frame.origin.y = top - target      // 顶部锚定，视觉上不跳
-        
-        lastAppliedHeight = target
-        if animate {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.12
-                panel.animator().setFrame(frame, display: true)
-            }
-        } else {
-            panel.setFrame(frame, display: true)
-        }
-    }
-    
-    override func showWindow(activate: Bool = true, makeKey: Bool = true) {
-        // 显示前先摆好高度：有测量值就按内容，没有就给一个舒服的默认高度，
-        // 避免「先开得很矮、内容出来再长高」的跳动
-        if let panel {
-            let target = max(
-                Self.minAutoHeight,
-                min(lastContentHeight ?? Self.defaultHeight, heightLimit)
-            )
-            var frame = panel.frame
-            frame.size.height = target
-            frame.origin.y = frame.maxY - target
-            lastAppliedHeight = target
-            panel.setFrame(frame, display: true)
-        }
-        super.showWindow(activate: activate, makeKey: makeKey)
-    }
-    
-    override func windowDidResize(_ notification: Notification) {
-        guard let panel else { return }
-        let height = panel.frame.height
-        // 自动变高不算「用户调整」：只有差得明显才更新上限
-        if let applied = lastAppliedHeight, abs(height - applied) <= 2 {
-            super.windowDidResize(notification)
-            return
-        }
-        heightLimit = max(height, Self.minAutoHeight)
-        UserDefaults.standard.set(Double(heightLimit), forKey: Self.heightLimitKey)
-        super.windowDidResize(notification)
     }
 }

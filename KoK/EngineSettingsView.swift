@@ -217,7 +217,7 @@ private struct ProviderDetailView: View {
             } header: {
                 Text("凭据")
             } footer: {
-                Text(provider.type == .deepL
+                SettingsFooter(provider.type == .deepL
                      ? "Key 形如 xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx。"
                      : "所有模型共用这把 Key。")
             }
@@ -252,7 +252,7 @@ private struct ProviderDetailView: View {
             } header: {
                 Text("备注与链接")
             } footer: {
-                Text("备注会显示在左侧列表上。")
+                SettingsFooter("备注会显示在左侧列表上。")
             }
             
             // ── 模型 ──────────────────────────────────────────
@@ -306,7 +306,7 @@ private struct ProviderDetailView: View {
                 } header: {
                     Text("模型")
                 } footer: {
-                    Text("只有勾选的模型会出现在引擎选择里；「译」「聊」设为对应用途的默认。")
+                    SettingsFooter("只有勾选的模型会出现在引擎选择里；「译」「聊」设为对应用途的默认。")
                 }
             }
             
@@ -349,7 +349,7 @@ private struct ProviderDetailView: View {
                     set: { value in mutate { $0.isEnabled = value } }
                 ))
             } footer: {
-                Text("关闭后，其下所有模型都不可用。")
+                SettingsFooter("关闭后，其下所有模型都不可用。")
             }
         }
         .formStyle(.grouped)

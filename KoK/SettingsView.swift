@@ -30,6 +30,22 @@ struct SettingsView: View {
     }
 }
 
+// MARK: - 分组表单的说明文字
+
+/// 统一左对齐：默认的 footer 会被带到右侧那一列，看起来参差不齐
+struct SettingsFooter: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+    
+    var body: some View {
+        Text(text)
+            .font(.caption)
+            .foregroundColor(.secondary)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 // MARK: - Tab 1: 通用设置
 
 struct GeneralSettingsTab: View {
@@ -68,7 +84,7 @@ struct GeneralSettingsTab: View {
             } header: {
                 Text("快捷键")
             } footer: {
-                Text("翻译读取选中文字，截图框选屏幕；对话是合并键——点按打开、按住说话。没反应时点「测试」。")
+                SettingsFooter("处理选中内容是主入口：选中文字按一下直接处理；对话是合并键——点按打开、按住说话。没反应时点「测试」。")
             }
             
             Section {
@@ -99,29 +115,31 @@ struct GeneralSettingsTab: View {
             } header: {
                 Text("权限")
             } footer: {
-                Text("语音识别在本机完成，录音不出设备。")
+                SettingsFooter("语音识别在本机完成，录音不出设备。")
             }
             
             Section {
                 LabeledContent("接口地址") {
                     TextField("", text: $imageGenURL)
                         .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: .infinity)
                 }
                 
                 LabeledContent("API Key") {
                     SecureField("", text: $imageGenAPIKey)
                         .textFieldStyle(.roundedBorder)
-                        .layoutPriority(1)
+                        .frame(maxWidth: .infinity)
                 }
                 
                 LabeledContent("模型") {
                     TextField("", text: $imageGenModel)
                         .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: .infinity)
                 }
             } header: {
                 Text("生图")
             } footer: {
-                Text("腾讯混元：在对话面板点 ✨ 进入生图模式；图片上下文（截图/复制）会作为参考图。")
+                SettingsFooter("腾讯混元。说「画一张…」会自动生图；点 ✨ 可手动进入生图模式（图片上下文当参考图）。")
             }
             
             Section {
@@ -150,17 +168,16 @@ struct GeneralSettingsTab: View {
                         }
                     }
             } header: {
-                Text("对话")
+                Text("对话记录")
             } footer: {
-                Text("默认关闭：对话只存在内存里，退出即消失。\n"
-                     + "打开后，当前对话（文字与生成结果）会存在 ~/Library/Application Support/KoK/，"
-                     + "下次启动自动恢复；点「新对话」或关掉这个开关都会删除。"
-                     + "截图 / 参考图不会被保存。")
+                SettingsFooter("默认关闭：对话只存在内存里。打开后存到本机，下次启动恢复；"
+                     + "点「新对话」或关掉开关即删除（截图 / 参考图不会被保存）。")
             }
         }
         .formStyle(.grouped)
         .onAppear { refreshPermissions() }
     }
+    
     
     @ViewBuilder
     private func permissionRow(_ title: String, request: @escaping () -> Void) -> some View {

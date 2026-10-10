@@ -86,8 +86,9 @@ struct ChatView: View {
     
     private var toolbar: some View {
         HStack(spacing: 8) {
-            Image(systemName: viewModel.activeAction.icon)
+            Image(systemName: "character.book.closed.fill")
                 .foregroundColor(.purple)
+                .font(.system(size: 13))
             
             engineMenu
             
@@ -111,16 +112,9 @@ struct ChatView: View {
                 HistoryPopover(viewModel: viewModel, isPresented: $showingHistory)
             }
             
-            if viewModel.isStreaming || viewModel.isGeneratingImage {
-                Button { viewModel.stop() } label: {
-                    Image(systemName: "stop.circle")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("停止生成")
-            }
-            
+            // 停止不单独放工具栏了：发送键在生成时会变成停止键（见 inputBar），
+            // 少一个常驻图标，也少一次「该点哪个」的犹豫
+
             Button { viewModel.clear() } label: {
                 Image(systemName: "square.and.pencil")
                     .font(.system(size: 12))
@@ -271,7 +265,7 @@ struct ChatView: View {
                     
                     Color.clear.frame(height: 1).id(bottomAnchor)
                 }
-                .padding(14)
+                .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .onScrollGeometryChange(for: Bool.self) { geometry in
@@ -303,12 +297,9 @@ struct ChatView: View {
             Text("选中文字，按 \(translateShortcutText) 直接处理")
                 .font(.system(size: 13, weight: .medium))
             VStack(alignment: .leading, spacing: 3) {
-                Text("· 顶部胶囊切换处理方式：翻译 / 总结 / 润色，或直接问它")
-                Text("· \(chatShortcutText) 打开这个面板；按住同一个键说话")
-                Text("· 选中图片或 \(screenshotShortcutText) 截图，可以贴进上下文")
-                Text(keepConversation
-                     ? "· 对话会保存在本机，退出后可恢复（设置里可关）"
-                     : "· 对话只存在内存里，点右上角图标即可开始新对话")
+                Text("· 上方胶囊切换：翻译 / 总结 / 润色；直接打字就是提问")
+                Text("· 按住 \(chatShortcutText) 说话，\(screenshotShortcutText) 截图当上下文")
+                Text(keepConversation ? "· 对话会保存在本机（设置里可关）" : "· 对话只存在内存里，退出即消失")
             }
             .font(.caption)
             .foregroundColor(.secondary)
@@ -354,6 +345,16 @@ struct ChatView: View {
     }
     
     // MARK: - 输入区
+    
+    /// 正在生成（文字流式或出图）：此时发送键变成停止键
+    private var isBusy: Bool {
+        viewModel.isStreaming || viewModel.isGeneratingImage
+    }
+    
+    private var sendButtonIcon: String {
+        if isBusy { return "stop.fill" }
+        return viewModel.isImageMode ? "sparkles" : "arrow.up.circle.fill"
+    }
     
     private var inputBar: some View {
         HStack(alignment: .bottom, spacing: 8) {
@@ -430,14 +431,20 @@ struct ChatView: View {
             .buttonStyle(.plain)
             .help(viewModel.isListening ? "结束并发送" : "语音输入")
             
-            Button { viewModel.send() } label: {
-                Image(systemName: viewModel.isImageMode ? "sparkles" : "arrow.up.circle.fill")
+            Button {
+                if isBusy {
+                    viewModel.stop()
+                } else {
+                    viewModel.send()
+                }
+            } label: {
+                Image(systemName: sendButtonIcon)
                     .font(.system(size: 20))
-                    .foregroundColor(viewModel.canSend ? .accentColor : Color.secondary.opacity(0.4))
+                    .foregroundColor(isBusy ? .secondary : (viewModel.canSend ? .accentColor : Color.secondary.opacity(0.4)))
             }
             .buttonStyle(.plain)
-            .disabled(!viewModel.canSend)
-            .help(viewModel.isImageMode ? "生成图片 (↵)" : "发送 (↵)")
+            .disabled(!isBusy && !viewModel.canSend)
+            .help(isBusy ? "停止生成" : (viewModel.isImageMode ? "生成图片 (↵)" : "发送 (↵)"))
         }
         .padding(12)
         .background(Color.primary.opacity(0.02))
@@ -680,9 +687,8 @@ struct MessageRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 
                 if !isStreaming {
+                    // 操作按钮统一左对齐（和普通回复的「复制」在同一条视觉基线上）
                     HStack(spacing: 14) {
-                        Spacer(minLength: 0)
-                        
                         copyButton(message.content)
                         
                         Button { onReplace() } label: {
@@ -692,6 +698,8 @@ struct MessageRow: View {
                         .buttonStyle(.plain)
                         .foregroundColor(.blue)
                         .help("切回来源应用，用结果覆盖选中的原文（选区已丢失时会粘贴在光标处）")
+                        
+                        Spacer(minLength: 0)
                     }
                 }
             }

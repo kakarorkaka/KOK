@@ -30,7 +30,7 @@ struct PromptSettingsTab: View {
                     manager.globalSystemPrompt = EngineConfig.defaultSystemPrompt
                 }
             } footer: {
-                Text("留空则用内置默认值。可用变量：\(PromptTemplate.Variable.targetLang.display) 目标语言、"
+                SettingsFooter("留空则用内置默认值。可用变量：\(PromptTemplate.Variable.targetLang.display) 目标语言、"
                      + "\(PromptTemplate.Variable.sourceLang.display) 源语言（大小写与单双括号均可识别）。")
             }
             
@@ -49,7 +49,7 @@ struct PromptSettingsTab: View {
                     manager.chatSystemPrompt = EngineConfig.defaultChatSystemPrompt
                 }
             } footer: {
-                Text("对话不做变量替换。")
+                SettingsFooter("对话不做变量替换。")
             }
         }
         .formStyle(.grouped)

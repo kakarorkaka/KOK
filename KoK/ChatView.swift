@@ -22,9 +22,6 @@ struct ChatView: View {
     /// 用户是否停在底部：不在底部时不要把他拽回去（流式输出期间尤其重要）
     @State private var isAtBottom = true
     @State private var lastMessageCount = 0
-    /// 打字自动切动作时的一行提示
-    @State private var actionHint: String?
-    @State private var hintTask: Task<Void, Never>?
     
     private let bottomAnchor = "chat-bottom"
     
@@ -32,16 +29,7 @@ struct ChatView: View {
         VStack(spacing: 0) {
             toolbar
             Divider()
-            actionCapsules
-            if let actionHint {
-                Text(actionHint)
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 6)
-                    .transition(.opacity)
-            }
+            actionSelector
             transcript
             if let error = viewModel.errorMessage {
                 Divider()
@@ -69,10 +57,10 @@ struct ChatView: View {
         .onAppear { focusInput() }
         .onChange(of: viewModel.focusRequest) { _, _ in focusInput() }
         .onChange(of: viewModel.input) { _, newValue in
-            // 开始打字 = 在追问：胶囊自动回到「问答」，并给一行提示免得用户困惑
+            // 开始打字 = 在追问：选区自动回到「问答」（分段控件的选中态本身足够显眼，
+            // 不需要再补一行提示）
             if !newValue.isEmpty, viewModel.activeAction != .chat {
                 viewModel.activeAction = .chat
-                showActionHint("已切到「问答」· 想继续上面的处理，点上方胶囊即可")
             }
         }
         .overlay {
@@ -88,7 +76,7 @@ struct ChatView: View {
         HStack(spacing: 8) {
             Image(systemName: "character.book.closed.fill")
                 .foregroundColor(.purple)
-                .font(.system(size: 13))
+                .font(.system(size: 12))
             
             engineMenu
             
@@ -219,22 +207,33 @@ struct ChatView: View {
         .fixedSize()
     }
     
-    /// 临时形态：点一下，这一次按这个动作处理。零输入动作点完立即执行。
-    private var actionCapsules: some View {
-        HStack(spacing: 6) {
-            ForEach(ChatAction.allCases) { act in
-                ActionCapsule(
-                    title: act.title,
-                    icon: act.icon,
-                    isActive: viewModel.activeAction == act
-                ) {
-                    viewModel.selectAction(act)
+    // MARK: - 动作选择（分段控件）
+    
+    /// 临时形态：选一下，这一次按这个动作处理；零输入动作选完立即执行。
+    /// 纯文字 + 单个分段控件：两字标签本身无歧义，图标只是噪声，
+    /// 四个独立胶囊也不如一个控件干净。
+    private var actionSelector: some View {
+        HStack(spacing: 0) {
+            Picker("", selection: actionSelection) {
+                ForEach(ChatAction.allCases) { act in
+                    Text(act.title).tag(act)
                 }
             }
-            Spacer()
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 240)
+            
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
+    }
+    
+    private var actionSelection: Binding<ChatAction> {
+        Binding(
+            get: { viewModel.activeAction },
+            set: { viewModel.selectAction($0) }
+        )
     }
     
     // MARK: - 消息区
@@ -297,7 +296,7 @@ struct ChatView: View {
             Text("选中文字，按 \(translateShortcutText) 直接处理")
                 .font(.system(size: 13, weight: .medium))
             VStack(alignment: .leading, spacing: 3) {
-                Text("· 上方胶囊切换：翻译 / 总结 / 润色；直接打字就是提问")
+                Text("· 顶部切换：翻译 / 总结 / 润色；直接打字就是提问")
                 Text("· 按住 \(chatShortcutText) 说话，\(screenshotShortcutText) 截图当上下文")
                 Text(keepConversation ? "· 对话会保存在本机（设置里可关）" : "· 对话只存在内存里，退出即消失")
             }
@@ -388,7 +387,7 @@ struct ChatView: View {
                         Text(viewModel.imageSize.title)
                             .font(.system(size: 11))
                         Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 8))
+                            .font(.system(size: 9))
                     }
                     .padding(.horizontal, 6)
                     .padding(.vertical, 4)
@@ -543,17 +542,6 @@ struct ChatView: View {
             inputFocused = true
         }
     }
-    
-    /// 短暂显示一行提示（自动切动作时用），3 秒后淡出
-    private func showActionHint(_ text: String) {
-        hintTask?.cancel()
-        withAnimation(.easeInOut(duration: 0.15)) { actionHint = text }
-        hintTask = Task {
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            guard !Task.isCancelled else { return }
-            withAnimation(.easeInOut(duration: 0.2)) { actionHint = nil }
-        }
-    }
 }
 
 // MARK: - 单条消息
@@ -598,7 +586,7 @@ struct MessageRow: View {
                         .font(.system(size: 13))
                         .textSelection(.enabled)
                         .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
+                        .padding(.vertical, 8)
                         .background(Color.accentColor.opacity(0.16))
                         .cornerRadius(10)
                 }

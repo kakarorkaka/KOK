@@ -199,6 +199,7 @@ private struct ProviderDetailView: View {
                         // 占位符保持为空：标签已经说明是什么，长提示会把窄输入框挤到换行
                         SecureField("", text: $keyDraft)
                             .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: .infinity)
                             .layoutPriority(1)
                             .onChange(of: keyDraft) { _, value in
                                 guard value != provider.apiKey else { return }
@@ -237,6 +238,7 @@ private struct ProviderDetailView: View {
                     HStack(spacing: 8) {
                         TextField("", text: $websiteDraft)
                             .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: .infinity)
                             .layoutPriority(1)
                             .onChange(of: websiteDraft) { _, value in
                                 guard value != provider.website else { return }
@@ -509,7 +511,7 @@ private struct ModelRow: View {
             
             VStack(alignment: .leading, spacing: 1) {
                 Text(model.name)
-                    .font(.system(size: 12.5))
+                    .font(.system(size: 12))
                     .foregroundColor(model.isEnabled ? .primary : .secondary)
                 if model.modelName != model.name {
                     Text(model.modelName)
@@ -737,7 +739,7 @@ struct AddProviderSheet: View {
                                 Image(systemName: selectedModels.contains(item.id) ? "checkmark.square.fill" : "square")
                                     .foregroundColor(selectedModels.contains(item.id) ? .accentColor : .secondary)
                                 Text(item.name)
-                                    .font(.system(size: 12.5))
+                                    .font(.system(size: 12))
                                 Spacer()
                                 Text(item.id)
                                     .font(.system(size: 10, design: .monospaced))
@@ -939,7 +941,7 @@ struct FetchModelsSheet: View {
                                     Image(systemName: selected.contains(item.id) ? "checkmark.square.fill" : "square")
                                         .foregroundColor(selected.contains(item.id) ? .accentColor : .secondary)
                                     Text(item.name)
-                                        .font(.system(size: 12.5))
+                                        .font(.system(size: 12))
                                     Spacer()
                                     Text(item.id)
                                         .font(.system(size: 10, design: .monospaced))

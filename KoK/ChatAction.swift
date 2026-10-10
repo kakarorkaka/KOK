@@ -67,32 +67,3 @@ enum ChatAction: String, CaseIterable, Identifiable {
     static let chatPanelActions: [ChatAction] = [.chat, .summarize, .polish]
 }
 
-// MARK: - 胶囊按钮（两个面板共用）
-
-struct ActionCapsule: View {
-    let title: String
-    let icon: String
-    let isActive: Bool
-    let onTap: () -> Void
-    
-    var body: some View {
-        Button { onTap() } label: {
-            HStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.system(size: 10))
-                Text(title)
-                    .font(.system(size: 11))
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(isActive ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.05))
-            .cornerRadius(6)
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(isActive ? Color.accentColor.opacity(0.5) : Color.clear, lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
-        .help("用「\(title)」处理：仅对这一次生效")
-    }
-}

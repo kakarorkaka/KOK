@@ -39,6 +39,8 @@ enum SelectionProvider {
     static func capture(timeout: TimeInterval = 0.6) async -> Capture {
         let pasteboard = NSPasteboard.general
         let before = pasteboard.changeCount
+        // 借剪贴板之前先留一份，读完选中内容再还回去
+        let snapshot = ClipboardSnapshot(pasteboard)
         let trusted = AXIsProcessTrusted()
         let started = Date()
         let sourceApp = NSWorkspace.shared.frontmostApplication
@@ -56,11 +58,16 @@ enum SelectionProvider {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if pasteboard.changeCount != before {
+                let capturedChangeCount = pasteboard.changeCount
                 var capture = read(from: pasteboard)
                 capture.sourceApp = sourceApp
                 let ms = Int(Date().timeIntervalSince(started) * 1000)
-                Diagnostics.log("capture: 剪贴板已变  \(ms)ms  changeCount=\(before)→\(pasteboard.changeCount)"
+                Diagnostics.log("capture: 剪贴板已变  \(ms)ms  changeCount=\(before)→\(capturedChangeCount)"
                                 + "  文本=\(capture.text?.count ?? 0)字  图片=\(capture.image != nil ? "有" : "无")")
+                
+                // 给来源 App 一点时间把多种类型写完，再把用户原来的剪贴板还回去
+                try? await Task.sleep(nanoseconds: 20_000_000)
+                snapshot.restoreIfUnchanged(expected: capturedChangeCount)
                 return capture
             }
             try? await Task.sleep(nanoseconds: 25_000_000)
@@ -162,5 +169,47 @@ enum SelectionProvider {
     
     private static func postCopyCommand() {
         postCommand(key: 0x08)   // C
+    }
+}
+
+// MARK: - 剪贴板快照
+
+/// 抓选区 / 替换文本都要临时借用剪贴板。
+/// 借完把用户原来的内容放回去——「翻译一下」不该顺手清掉刚复制的东西。
+struct ClipboardSnapshot {
+    private let items: [[NSPasteboard.PasteboardType: Data]]
+    
+    init(_ pasteboard: NSPasteboard = .general) {
+        items = (pasteboard.pasteboardItems ?? []).map { item in
+            var storage: [NSPasteboard.PasteboardType: Data] = [:]
+            for type in item.types {
+                if let data = item.data(forType: type) {
+                    storage[type] = data
+                }
+            }
+            return storage
+        }
+    }
+    
+    /// 只有剪贴板还停在我们写的那一版时才恢复；
+    /// 如果用户/别的 App 已经复制了新内容，就不要覆盖它。
+    @discardableResult
+    func restoreIfUnchanged(expected changeCount: Int, to pasteboard: NSPasteboard = .general) -> Bool {
+        guard pasteboard.changeCount == changeCount else { return false }
+        
+        pasteboard.clearContents()
+        guard !items.isEmpty else { return true }
+        
+        let restored = items.compactMap { storage -> NSPasteboardItem? in
+            guard !storage.isEmpty else { return nil }
+            let item = NSPasteboardItem()
+            for (type, data) in storage {
+                item.setData(data, forType: type)
+            }
+            return item
+        }
+        guard !restored.isEmpty else { return true }
+        
+        return pasteboard.writeObjects(restored)
     }
 }

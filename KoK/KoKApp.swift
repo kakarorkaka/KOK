@@ -26,6 +26,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
     private var settingsWindow: NSWindow?
     private var onboardingPopover: NSPopover?
+    #if DEBUG
+    private var debugRenderObserver: NSObjectProtocol?
+    #endif
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 1. 引擎配置必须立刻加载：它负责把旧版扁平结构迁移成「服务商 → 模型」，
@@ -62,6 +65,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
             _ = ChatPanelController.shared
         }
+        
+        #if DEBUG
+        // 调试用：post 这个通知即可把面板离屏渲染成 PNG，不依赖截图权限。
+        debugRenderObserver = DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("com.kok.debug.renderPreview"),
+            object: nil,
+            queue: .main
+        ) { _ in
+            Task { @MainActor in
+                ChatPanelController.shared.debugRenderPreview()
+            }
+        }
+        
+        #endif
     }
     
     func setupStatusBar() {

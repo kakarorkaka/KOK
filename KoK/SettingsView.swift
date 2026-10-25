@@ -50,9 +50,6 @@ struct SettingsFooter: View {
 
 struct GeneralSettingsTab: View {
     @AppStorage("voice_locale") private var voiceLocale = VoiceLocale.chinese.rawValue
-    @AppStorage("image_gen_url") private var imageGenURL = ImageGenerationService.defaultURL
-    @AppStorage("image_gen_api_key") private var imageGenAPIKey = ""
-    @AppStorage("image_gen_model") private var imageGenModel = ImageGenerationService.defaultModel
     @AppStorage("keep_conversation") private var keepConversation = false
     
     @State private var launchAtLogin: Bool = {
@@ -84,7 +81,7 @@ struct GeneralSettingsTab: View {
             } header: {
                 Text("快捷键")
             } footer: {
-                SettingsFooter("处理选中内容是主入口：选中文字按一下直接处理；对话是合并键——点按打开、按住说话。没反应时点「测试」。")
+                SettingsFooter("翻译是主入口：选中文字按一下直接翻译；对话是合并键——点按打开、按住说话。没反应时点「测试」。")
             }
             
             Section {
@@ -116,30 +113,6 @@ struct GeneralSettingsTab: View {
                 Text("权限")
             } footer: {
                 SettingsFooter("语音识别在本机完成，录音不出设备。")
-            }
-            
-            Section {
-                LabeledContent("接口地址") {
-                    TextField("", text: $imageGenURL)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: .infinity)
-                }
-                
-                LabeledContent("API Key") {
-                    SecureField("", text: $imageGenAPIKey)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: .infinity)
-                }
-                
-                LabeledContent("模型") {
-                    TextField("", text: $imageGenModel)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: .infinity)
-                }
-            } header: {
-                Text("生图")
-            } footer: {
-                SettingsFooter("腾讯混元。说「画一张…」会自动生图；点 ✨ 可手动进入生图模式（图片上下文当参考图）。")
             }
             
             Section {

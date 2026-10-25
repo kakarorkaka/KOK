@@ -31,9 +31,6 @@ struct OnboardingView: View {
         if VoiceInputService.needsPermission {
             missing.append("麦克风与语音")
         }
-        if !ScreenshotCapture.hasPermission {
-            missing.append("屏幕录制")
-        }
         return missing
     }
     
@@ -48,12 +45,16 @@ struct OnboardingView: View {
             
             VStack(alignment: .leading, spacing: 6) {
                 shortcutRow(shortcut(for: .translate), "翻译选中文字")
-                shortcutRow(shortcut(for: .chat), "点按打开，按住说话（带选中内容）")
-                shortcutRow(shortcut(for: .screenshot), "框选截图作为上下文")
+                shortcutRow(shortcut(for: .chat), "点按提问，按住说话")
             }
             .padding(10)
             .background(Color.primary.opacity(0.04))
             .cornerRadius(8)
+            
+            Text("译文出来后可 ⌘↩ 替换回原处；选中文字后按住说话，问的也是这段内容。")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             
             if missingPermissions.isEmpty {
                 Label("权限齐全", systemImage: "checkmark.circle.fill")

@@ -14,7 +14,6 @@ struct ChatView: View {
     
     /// 空状态里显示真实快捷键（用户可能在设置里改过）
     @ObservedObject private var hotKeys = HotKeyManager.shared
-    @AppStorage("keep_conversation") private var keepConversation = false
     
     @FocusState private var inputFocused: Bool
     @State private var dragOffset: CGPoint?
@@ -31,25 +30,30 @@ struct ChatView: View {
     private let bottomAnchor = "chat-bottom"
     
     var body: some View {
-        VStack(spacing: 0) {
-            toolbar
-            Divider()
-            actionSelector
-            transcript
-            if let error = viewModel.errorMessage {
-                Divider()
-                errorBanner(error)
+        Group {
+            if viewModel.isListening || viewModel.isTranscribing {
+                listeningView
+            } else {
+                VStack(spacing: 0) {
+                    toolbar
+                    Divider()
+                    transcript
+                    if let error = viewModel.errorMessage {
+                        Divider()
+                        errorBanner(error)
+                    }
+                    if let voiceError = viewModel.voiceError {
+                        Divider()
+                        voiceErrorBanner(voiceError)
+                    }
+                    if viewModel.context != nil {
+                        Divider()
+                        contextBar
+                    }
+                    Divider()
+                    inputBar
+                }
             }
-            if let voiceError = viewModel.voiceError {
-                Divider()
-                voiceErrorBanner(voiceError)
-            }
-            if viewModel.isListening || viewModel.context != nil {
-                Divider()
-                contextBar
-            }
-            Divider()
-            inputBar
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.ultraThinMaterial)
@@ -62,8 +66,8 @@ struct ChatView: View {
         .onAppear { focusInput() }
         .onChange(of: viewModel.focusRequest) { _, _ in focusInput() }
         .onChange(of: viewModel.input) { _, newValue in
-            // 开始打字 = 在追问：选区自动回到「问答」（分段控件的选中态本身足够显眼，
-            // 不需要再补一行提示）
+            // 开始打字 = 从「翻译」切到「提问」。翻译是主入口，
+            // 但只要用户开始打字，就是在追问，不需要再点别的东西。
             if !newValue.isEmpty, viewModel.activeAction != .chat {
                 viewModel.activeAction = .chat
             }
@@ -73,6 +77,76 @@ struct ChatView: View {
                 ImagePreviewOverlay(image: image) { viewModel.closePreview() }
             }
         }
+        .overlay(alignment: .top) {
+            if viewModel.copyFeedback {
+                Text("已复制")
+                    .font(.system(size: 11, weight: .medium))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(.regularMaterial, in: Capsule())
+                    .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
+                    .padding(.top, 54)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .allowsHitTesting(false)
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: viewModel.copyFeedback)
+    }
+
+    // MARK: - 语音 HUD
+
+    /// 按住说话时，整个面板收成一张安静的「聆听卡」：
+    /// 真实音量条 + 实时转写，不显示输入框和工具栏。
+    private var listeningView: some View {
+        VStack(spacing: 12) {
+            HStack {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(viewModel.isListening ? Color.red : Color.orange)
+                        .frame(width: 7, height: 7)
+                    Text(viewModel.isListening ? "正在听" : "正在整理")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer()
+
+                Button {
+                    viewModel.cancelVoice()
+                    onDismiss?()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(IconButtonStyle())
+                .help("取消这次语音（不发送）")
+            }
+
+            Spacer(minLength: 0)
+
+            VoiceLevelView(level: viewModel.voice.audioLevel)
+                .opacity(viewModel.isListening ? 1 : 0.45)
+
+            Text(viewModel.voice.transcript.isEmpty
+                 ? (viewModel.isListening ? "说吧，松开就发送" : "正在整理…")
+                 : viewModel.voice.transcript)
+                .font(.system(size: 16, weight: .medium))
+                .multilineTextAlignment(.center)
+                .lineLimit(4)
+                .foregroundColor(viewModel.voice.transcript.isEmpty ? .secondary : .primary)
+                .padding(.horizontal, 28)
+                .animation(.easeOut(duration: 0.12), value: viewModel.voice.transcript)
+
+            Text(viewModel.isListening ? "松开即发送 · 点右上角取消" : "正在把这句话发出去…")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+
+            Spacer(minLength: 0)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.red.opacity(0.03))
     }
         
     // MARK: - 工具栏
@@ -212,35 +286,6 @@ struct ChatView: View {
         .fixedSize()
     }
     
-    // MARK: - 动作选择（分段控件）
-    
-    /// 临时形态：选一下，这一次按这个动作处理；零输入动作选完立即执行。
-    /// 纯文字 + 单个分段控件：两字标签本身无歧义，图标只是噪声，
-    /// 四个独立胶囊也不如一个控件干净。
-    private var actionSelector: some View {
-        HStack(spacing: 0) {
-            Picker("", selection: actionSelection) {
-                ForEach(ChatAction.allCases) { act in
-                    Text(act.title).tag(act)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 240)
-            
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-    }
-    
-    private var actionSelection: Binding<ChatAction> {
-        Binding(
-            get: { viewModel.activeAction },
-            set: { viewModel.selectAction($0) }
-        )
-    }
-    
     // MARK: - 消息区
     
     private var transcript: some View {
@@ -263,7 +308,8 @@ struct ChatView: View {
                             isImagePending: viewModel.isGeneratingImage && index == visibleMessages.count - 1,
                             onCopy: { viewModel.copy($0) },
                             onPreview: { viewModel.preview($0) },
-                            onReplace: { viewModel.replaceSelection() }
+                            onReplace: { viewModel.replaceSelection(cardId: message.id) },
+                            onRetranslate: { viewModel.retranslate(cardId: message.id) }
                         )
                     }
                     
@@ -309,12 +355,11 @@ struct ChatView: View {
     
     private var emptyHint: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("选中文字，按 \(translateShortcutText) 直接处理")
+            Text("选中文字，按 \(translateShortcutText) 翻译")
                 .font(.system(size: 13, weight: .medium))
             VStack(alignment: .leading, spacing: 3) {
-                Text("· 顶部切换：翻译 / 总结 / 润色；直接打字就是提问")
-                Text("· 按住 \(chatShortcutText) 说话，\(screenshotShortcutText) 截图当上下文")
-                Text(keepConversation ? "· 对话会保存在本机（设置里可关）" : "· 对话只存在内存里，退出即消失")
+                Text("· 直接打字，或按住 \(chatShortcutText) 说话，问任何问题")
+                Text("· 译文可 ⌘↩ 替换回原处，⌘C 复制")
             }
             .font(.caption)
             .foregroundColor(.secondary)
@@ -329,10 +374,6 @@ struct ChatView: View {
     
     private var chatShortcutText: String {
         hotKeys.shortcut(for: .chat)?.displayString ?? "⌘3"
-    }
-    
-    private var screenshotShortcutText: String {
-        hotKeys.shortcut(for: .screenshot)?.displayString ?? "⌥C"
     }
     
     // MARK: - 错误条
@@ -367,55 +408,13 @@ struct ChatView: View {
     }
     
     private var sendButtonIcon: String {
-        if isBusy { return "stop.fill" }
-        return viewModel.isImageMode ? "sparkles" : "arrow.up.circle.fill"
+        isBusy ? "stop.fill" : "arrow.up.circle.fill"
     }
     
     private var inputBar: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            // 生图模式开关
-            Button {
-                viewModel.isImageMode.toggle()
-            } label: {
-                Image(systemName: "wand.and.stars")
-                    .font(.system(size: 17))
-                    .foregroundColor(viewModel.isImageMode ? .accentColor : .secondary)
-            }
-            .buttonStyle(IconButtonStyle())
-            .help(viewModel.isImageMode ? "退出生图模式" : "生图模式：输入当提示词，图片上下文当参考图")
-            
-            if viewModel.isImageMode {
-                Menu {
-                    ForEach(ImageGenSize.allCases) { size in
-                        Button { viewModel.selectImageSize(size) } label: {
-                            HStack {
-                                Text(size.title)
-                                if size == viewModel.imageSize {
-                                    Image(systemName: "checkmark")
-                                }
-                            }
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 3) {
-                        Image(systemName: "aspectratio")
-                            .font(.system(size: 10))
-                        Text(viewModel.imageSize.title)
-                            .font(.system(size: 11))
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 9))
-                    }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 4)
-                    .background(Color.primary.opacity(0.06))
-                    .cornerRadius(6)
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-            }
-            
             TextField(
-                viewModel.isImageMode ? "描述你想生成的图片…" : "问点什么…（↵ 发送，⇧↵ 换行）",
+                "问点什么…（选中文字按 \(translateShortcutText) 翻译）",
                 text: $viewModel.input, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
@@ -432,19 +431,15 @@ struct ChatView: View {
                 }
             
             Button {
-                if viewModel.isListening {
-                    viewModel.endVoiceAndSend()
-                } else {
-                    // 从面板里点麦克风时不能再抓选中内容——焦点已经在 KoK 自己身上了
-                    viewModel.beginVoice(captureSelection: false)
-                }
+                // 从面板里点麦克风时不能再抓选中内容——焦点已经在 KoK 自己身上了
+                viewModel.beginVoice(captureSelection: false)
             } label: {
-                Image(systemName: viewModel.isListening ? "mic.fill" : "mic")
+                Image(systemName: "mic")
                     .font(.system(size: 17))
-                    .foregroundColor(viewModel.isListening ? .red : .secondary)
+                    .foregroundColor(.secondary)
             }
             .buttonStyle(IconButtonStyle())
-            .help(viewModel.isListening ? "结束并发送" : "语音输入")
+            .help("语音输入")
             
             Button {
                 if isBusy {
@@ -459,7 +454,7 @@ struct ChatView: View {
             }
             .buttonStyle(IconButtonStyle())
             .disabled(!isBusy && !viewModel.canSend)
-            .help(isBusy ? "停止生成" : (viewModel.isImageMode ? "生成图片 (↵)" : "发送 (↵)"))
+            .help(isBusy ? "停止生成" : "发送 (↵)")
         }
         .padding(12)
         .background(Color.primary.opacity(0.02))
@@ -469,25 +464,6 @@ struct ChatView: View {
     
     private var contextBar: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if viewModel.isListening {
-                HStack(spacing: 8) {
-                    Image(systemName: "mic.fill")
-                        .font(.system(size: 12))
-                        .foregroundColor(.red)
-                    
-                    Text(viewModel.voice.transcript.isEmpty ? "正在聆听…" : viewModel.voice.transcript)
-                        .font(.system(size: 12))
-                        .foregroundColor(viewModel.voice.transcript.isEmpty ? .secondary : .primary)
-                        .lineLimit(2)
-                    
-                    Spacer(minLength: 0)
-                    
-                    Text("松开即发送")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-            }
-            
             if let context = viewModel.context {
                 HStack(spacing: 6) {
                     if let image = context.image {
@@ -526,7 +502,7 @@ struct ChatView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(viewModel.isListening ? Color.red.opacity(0.07) : Color.accentColor.opacity(0.06))
+        .background(Color.accentColor.opacity(0.06))
     }
     
     private func contextChip(icon: String, text: String) -> some View {
@@ -557,6 +533,32 @@ struct ChatView: View {
         DispatchQueue.main.async {
             inputFocused = true
         }
+    }
+}
+
+// MARK: - 语音音量条
+
+/// 真实麦克风电平驱动的五根小竖条。比转圈更能让人确认「它在听」。
+private struct VoiceLevelView: View {
+    let level: CGFloat
+
+    private let factors: [CGFloat] = [0.45, 0.8, 1.0, 0.65, 0.4]
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 4) {
+            ForEach(Array(factors.enumerated()), id: \.offset) { _, factor in
+                Capsule()
+                    .fill(Color.red.opacity(0.85))
+                    .frame(width: 3, height: 6 + 30 * clamped * factor)
+            }
+        }
+        .frame(height: 38)
+        .animation(.easeOut(duration: 0.08), value: level)
+        .accessibilityHidden(true)
+    }
+
+    private var clamped: CGFloat {
+        min(1, max(0, level))
     }
 }
 
@@ -597,6 +599,7 @@ struct MessageRow: View {
     let onCopy: (String) -> Void
     let onPreview: (ImageAttachment) -> Void
     let onReplace: () -> Void
+    let onRetranslate: () -> Void
     
     /// 就地反馈：点哪个按钮就在哪个按钮上显示「已复制」
     @State private var copied = false
@@ -650,7 +653,7 @@ struct MessageRow: View {
     // MARK: - 变换卡片（原文 → 结果，带复制 / 替换）
     
     /// 就地反馈的复制按钮：点哪个就在哪个上显示「已复制」
-    private func copyButton(_ text: String) -> some View {
+    private func copyButton(_ text: String, shortcut: String? = nil) -> some View {
         Button {
             onCopy(text)
             copied = true
@@ -658,7 +661,7 @@ struct MessageRow: View {
                 copied = false
             }
         } label: {
-            Label(copied ? "已复制" : "复制",
+            Label(copied ? "已复制" : (shortcut.map { "\($0) 复制" } ?? "复制"),
                   systemImage: copied ? "checkmark" : "doc.on.doc")
                 .font(.system(size: 11))
         }
@@ -717,17 +720,25 @@ struct MessageRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 
                 if !isStreaming {
-                    // 操作按钮统一左对齐（和普通回复的「复制」在同一条视觉基线上）
-                    HStack(spacing: 14) {
-                        copyButton(message.content)
-                        
+                    // 「替换」是翻译的主动作，放第一位；复制和重译次之。
+                    HStack(spacing: 12) {
                         Button { onReplace() } label: {
-                            Label("替换", systemImage: "arrow.triangle.2.circlepath")
+                            Label("⌘↩ 替换", systemImage: "arrow.triangle.2.circlepath")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .buttonStyle(IconButtonStyle())
+                        .foregroundColor(.accentColor)
+                        .help("⌘↩ 把译文替换回原处；可在来源 App 按 ⌘Z 撤销")
+                        
+                        copyButton(message.content, shortcut: "⌘C")
+                        
+                        Button { onRetranslate() } label: {
+                            Label("⌘R 重译", systemImage: "arrow.clockwise")
                                 .font(.system(size: 11))
                         }
                         .buttonStyle(IconButtonStyle())
-                        .foregroundColor(.blue)
-                        .help("切回来源应用，用结果覆盖选中的原文（选区已丢失时会粘贴在光标处）")
+                        .foregroundColor(.secondary)
+                        .help("⌘R 重新翻译这段")
                         
                         Spacer(minLength: 0)
                     }

@@ -59,9 +59,23 @@ final class VoiceInputService: ObservableObject {
     @Published private(set) var isRecording = false
     @Published private(set) var transcript = ""
     @Published private(set) var errorMessage: String?
+    /// 0...1 的实时输入电平，只用来画「它在听」的音量条
+    @Published private(set) var audioLevel: CGFloat = 0
     
     /// 兜底：万一「松开」事件丢了，录音也不会一直开着
     static let maxRecordingSeconds: TimeInterval = 60
+    
+    /// 识别器的上下文提示词：不需要覆盖所有词，主要覆盖高频的英文技术词，
+    /// 让「这个 API 的 error 怎么解」不被识别成完全不同的中文。
+    private static let builtInTerms: [String] = [
+        "API", "API Key", "JSON", "HTTP", "HTTPS", "URL", "SDK", "CLI",
+        "bug", "error", "log", "stack trace", "commit", "branch", "merge",
+        "pull request", "PR", "issue", "token", "prompt", "model", "agent",
+        "Swift", "SwiftUI", "Xcode", "macOS", "iOS", "Python", "JavaScript",
+        "TypeScript", "Rust", "Go", "Java", "SQL", "Docker", "Git", "GitHub",
+        "DeepSeek", "OpenAI", "ChatGPT", "Gemini", "Claude", "Qwen", "通义千问",
+        "混元", "豆包", "智谱", "月之暗面", "Moonshot",
+    ]
     
     private let engine = AVAudioEngine()
     private var request: SFSpeechAudioBufferRecognitionRequest?
@@ -103,7 +117,7 @@ final class VoiceInputService: ObservableObject {
     
     // MARK: - 录音
     
-    func start(localeIdentifier: String) throws {
+    func start(localeIdentifier: String, contextualStrings: [String] = []) throws {
         guard !isRecording else { return }
         
         guard Self.microphoneAuthorized else { throw VoiceError.microphoneDenied }
@@ -118,20 +132,30 @@ final class VoiceInputService: ObservableObject {
         
         transcript = ""
         errorMessage = nil
+        audioLevel = 0
         isFinal = false
         
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
+        request.addsPunctuation = true
+        request.taskHint = .dictation
         // 有离线资源就走本地，既快又不出网
         request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
+        // 中英混说时，把产品名/模型名/常见技术词喂给识别器，能少错一点
+        request.contextualStrings = Self.builtInTerms + contextualStrings
         self.request = request
         
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.channelCount > 0 else { throw VoiceError.noInputDevice }
         
-        input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, _ in
+        input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
             request.append(buffer)
+            let level = Self.level(from: buffer)
+            Task { @MainActor [weak self] in
+                guard let self, self.isRecording else { return }
+                self.audioLevel = self.audioLevel * 0.55 + level * 0.45
+            }
         }
         isTapInstalled = true
         
@@ -167,8 +191,9 @@ final class VoiceInputService: ObservableObject {
         teardownAudio()
         request?.endAudio()
         
-        // endAudio 之后通常还会补一个 isFinal 的结果，等它一下
-        for _ in 0..<24 {
+        // endAudio 之后通常还会补一个 isFinal 的结果，等它一下。
+        // 只等 0.6s：部分结果已经够用，不能让用户松手后干等一秒多。
+        for _ in 0..<12 {
             if isFinal { break }
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
@@ -210,5 +235,33 @@ final class VoiceInputService: ObservableObject {
             engine.inputNode.removeTap(onBus: 0)
             isTapInstalled = false
         }
+        audioLevel = 0
+    }
+    
+    #if DEBUG
+    /// 只给离屏预览用：伪造一段转写和电平，不启动麦克风。
+    func debugConfigure(transcript: String, level: CGFloat) {
+        self.transcript = transcript
+        self.audioLevel = level
+    }
+    #endif
+    
+    /// 把一小段 PCM 的 RMS 映射到 0...1，用来驱动音量条。
+    private static func level(from buffer: AVAudioPCMBuffer) -> CGFloat {
+        guard let channel = buffer.floatChannelData?[0] else { return 0 }
+        let count = Int(buffer.frameLength)
+        guard count > 0 else { return 0 }
+        
+        var sum: Float = 0
+        for index in 0..<count {
+            let sample = channel[index]
+            sum += sample * sample
+        }
+        
+        let rms = sqrt(sum / Float(count))
+        let decibels = 20 * log10(max(rms, 1e-7))
+        // 安静说话大约 -45 dB，正常音量 -25...-10 dB
+        let normalized = (decibels + 52) / 52
+        return CGFloat(min(1, max(0, normalized)))
     }
 }

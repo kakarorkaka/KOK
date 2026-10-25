@@ -82,6 +82,8 @@ final class ChatViewModel: ObservableObject {
     @Published var context: SelectionProvider.Capture?
     /// 是否正在录音
     @Published var isListening = false
+    /// 松手后的短暂收尾：等最终转写 + 抓选区，这段时间仍显示语音 HUD
+    @Published var isTranscribing = false
     /// 生图模式：输入框的内容当提示词，截图/图片上下文当参考图
     @Published var isImageMode = false
     /// 当前动作（临时状态：下一条消息按它处理，发完回到默认「问答」）
@@ -98,6 +100,7 @@ final class ChatViewModel: ObservableObject {
     let voice = VoiceInputService()
     private var voiceTimeoutTask: Task<Void, Never>?
     private var voiceStartTask: Task<Void, Never>?
+    private var voiceFinalizeTask: Task<Void, Never>?
     /// 本次录音是否需要抓取选中内容
     private var wantsSelection = false
     
@@ -163,6 +166,10 @@ final class ChatViewModel: ObservableObject {
     /// 送入模型的最大历史条数（约 10 轮）
     private let maxContextMessages = 20
     
+    /// v5：生图从产品主路径移除。保留代码，但不再暴露入口，
+    /// 也不再让模型通过标记块自动路由到生图。
+    private static let imageGenerationEnabled = false
+    
     // MARK: - 变换（零输入动作：选中 → 翻译 / 总结 / 润色）
     
     /// 翻译方向（只在「翻译」动作下出现）
@@ -211,37 +218,50 @@ final class ChatViewModel: ObservableObject {
         }
     }
     
-    /// 选一个动作：只对下一条消息生效，发完自动回到默认「问答」。
-    /// 零输入动作（翻译/总结/润色）点一下就立刻处理——优先用上一次的原文，
-    /// 其次用输入框里的内容。
-    func selectAction(_ action: ChatAction) {
-        let previous = activeAction
-        activeAction = action
-        guard !action.needsInput else {
-            requestFocus()
-            return
-        }
-        
-        if let source = lastTransformSource {
-            runTransform(text: source, action: action)
-        } else if !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
-            input = ""
-            runTransform(text: text, action: action)
-        } else if previous != action {
-            errorMessage = "先选中一段文本再来（选中后按 ⌘2 最顺手）"
-        }
+    // MARK: - 变换动作（⌘2 开场：抓取选中 → 立即翻译）
+    
+    /// 最近一张变换卡片（可能还在流式输出，也可能是失败后的空卡片）
+    private var lastTransformCard: ChatMessage? {
+        messages.last(where: { $0.transformSource != nil })
     }
     
-    // MARK: - 变换动作（⌘2 开场：抓取选中 → 立即执行）
-    
-    /// 最近一次变换的原文
-    var lastTransformSource: String? {
-        messages.last(where: { $0.transformSource != nil })?.transformSource
+    var canReplace: Bool {
+        !isStreaming && !(lastTransformCard?.content.isEmpty ?? true)
     }
     
-    /// ⌘2 入口：抓取当前选中文本，用当前动作立即处理
+    /// ⌘C 复制最近一条有内容的助手消息（翻译卡片或问答回答）
+    private var lastCopyableMessage: ChatMessage? {
+        messages.last(where: {
+            $0.role == .assistant
+                && !$0.hidden
+                && !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        })
+    }
+    
+    var canCopyResult: Bool {
+        !isStreaming && lastCopyableMessage != nil
+    }
+    
+    var canRetranslate: Bool {
+        !isStreaming && lastTransformCard?.transformSource != nil
+    }
+    
+    /// ⌘C：复制最近一条回答/译文
+    func copyLastResult() {
+        guard let message = lastCopyableMessage else { return }
+        copy(message.content)
+    }
+    
+    /// ⌘R：用同一段原文重新翻译。传 cardId 时只重跑那一张卡片。
+    func retranslate(cardId: UUID? = nil) {
+        let card = cardId.flatMap { id in messages.first { $0.id == id } } ?? lastTransformCard
+        guard let card, let source = card.transformSource else { return }
+        runTransform(text: source, action: card.transformAction ?? .translate)
+    }
+    
+    /// ⌘2 入口：抓取当前选中文本，立即翻译（v5：不再让「当前动作」决定入口）
     func beginTransform() {
+        activeAction = .translate
         transformTask?.cancel()
         transformTask = Task { [weak self] in
             guard let self else { return }
@@ -461,27 +481,76 @@ final class ChatViewModel: ObservableObject {
         runTransform(text: source, action: .translate)
     }
     
-    /// 替换选中文本：切回来源 App，用结果覆盖原文
-    func replaceSelection() {
-        guard let index = messages.lastIndex(where: { $0.transformAction != nil }) else { return }
-        let result = messages[index].content.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// 替换选中文本：切回来源 App，用结果覆盖原文。
+    ///
+    /// v5 的两个细节：
+    /// - 先激活、确认来源 App 真的回到前台，再隐藏并粘贴，避免结果落到别的窗口；
+    /// - 粘贴前后保存/恢复剪贴板，不让用户原来复制的东西被这次操作弄丢。
+    func replaceSelection(cardId: UUID? = nil) {
+        let card = cardId.flatMap { id in messages.first { $0.id == id } } ?? lastTransformCard
+        guard let card,
+              card.transformSource != nil,
+              !isStreaming
+        else { return }
+        
+        let result = card.content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !result.isEmpty else { return }
         
+        guard let sourceApp = lastSourceApp, !sourceApp.isTerminated else {
+            copy(result)
+            errorMessage = "来源 App 已关闭或找不到，译文已复制到剪贴板"
+            return
+        }
+        
         let pasteboard = NSPasteboard.general
+        let snapshot = ClipboardSnapshot(pasteboard)
         pasteboard.clearContents()
         pasteboard.setString(result, forType: .string)
+        let resultChangeCount = pasteboard.changeCount
         
-        Diagnostics.log("replace: 切回 \(lastSourceApp?.localizedName ?? "?") 并粘贴  长度=\(result.count)")
+        errorMessage = nil
+        Diagnostics.log("replace: 切回 \(sourceApp.localizedName ?? "?") 并粘贴  长度=\(result.count)")
         
-        // 面板让位，否则粘贴会打在 KoK 自己身上
+        // 面板先让位，再激活来源 App；否则面板仍持有 key window，激活可能失败
         onRequestHide?()
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-            guard let self else { return }
-            self.lastSourceApp?.activate(options: [.activateIgnoringOtherApps])
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+        sourceApp.activate()
+        pasteBack(to: sourceApp, snapshot: snapshot, resultChangeCount: resultChangeCount)
+    }
+    
+    /// 等来源 App 真正回到前台再粘贴；最多等约 0.6s。
+    /// 激活失败时不盲粘，保留结果并让面板带着错误提示回来。
+    private func pasteBack(
+        to sourceApp: NSRunningApplication,
+        snapshot: ClipboardSnapshot,
+        resultChangeCount: Int,
+        attempts: Int = 0
+    ) {
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier == sourceApp.processIdentifier {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                 SelectionProvider.simulatePaste()
+                
+                // 给目标 App 一点时间消费剪贴板，再恢复用户原来的内容；
+                // 若这期间用户又复制了别的东西，就不覆盖。
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                    snapshot.restoreIfUnchanged(expected: resultChangeCount)
+                }
             }
+            return
+        }
+        
+        guard attempts < 6 else {
+            errorMessage = "来源 App 没有回到前台，译文已复制到剪贴板，请手动粘贴"
+            onNeedsForeground?()
+            return
+        }
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.pasteBack(
+                to: sourceApp,
+                snapshot: snapshot,
+                resultChangeCount: resultChangeCount,
+                attempts: attempts + 1
+            )
         }
     }
     
@@ -620,10 +689,8 @@ final class ChatViewModel: ObservableObject {
     }
     
     func send() {
-        if isImageMode {
-            sendImagePrompt()
-            return
-        }
+        // v5：生图已从主界面移除，输入框只走问答
+        isImageMode = false
         
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isStreaming, !isGeneratingImage else { return }
@@ -664,11 +731,12 @@ final class ChatViewModel: ObservableObject {
     ///   只有全局快捷键那条路径该传 true——从面板里点麦克风时，
     ///   焦点已经在 KoK 自己身上，抓到的会是输入框里的文字。
     func beginVoice(captureSelection: Bool = true) {
-        guard !isListening else { return }
+        guard !isListening, !isTranscribing else { return }
         
         voiceError = nil
         errorMessage = nil
         isListening = true
+        isTranscribing = false
         wantsSelection = captureSelection
         
         Diagnostics.log("voice: 按下  录音权限(麦克风=\(VoiceInputService.microphoneAuthorized) 语音=\(VoiceInputService.speechAuthorized))")
@@ -686,17 +754,28 @@ final class ChatViewModel: ObservableObject {
                         ? VoiceInputService.VoiceError.speechDenied.localizedDescription
                         : VoiceInputService.VoiceError.microphoneDenied.localizedDescription
                     self.isListening = false
+                    // 权限失败时把面板提到前台，否则错误只挂在一个没有焦点的浮层上
+                    self.onNeedsForeground?()
                     return
                 }
             }
             
             guard !Task.isCancelled else { return }
             
+            // 把引擎/模型名作为识别提示词，改善「这个 API 的 error」这类中英混说
+            let engineTerms = self.engineManager.providers.flatMap { provider in
+                [provider.name] + provider.models.map(\.name)
+            }
+            
             do {
-                try self.voice.start(localeIdentifier: self.engineManager.voiceLocale)
+                try self.voice.start(
+                    localeIdentifier: self.engineManager.voiceLocale,
+                    contextualStrings: Array(engineTerms.prefix(24))
+                )
             } catch {
                 self.voiceError = error.localizedDescription
                 self.isListening = false
+                self.onNeedsForeground?()
             }
         }
         
@@ -713,47 +792,65 @@ final class ChatViewModel: ObservableObject {
     func endVoiceAndSend() {
         guard isListening else { return }
         isListening = false
+        isTranscribing = true
         voiceTimeoutTask?.cancel()
         voiceTimeoutTask = nil
         
         let shouldCapture = wantsSelection
         wantsSelection = false
         
-        Task { [weak self] in
+        voiceFinalizeTask?.cancel()
+        voiceFinalizeTask = Task { [weak self] in
             guard let self else { return }
+            defer {
+                self.isTranscribing = false
+                self.voiceFinalizeTask = nil
+            }
             
             // 等录音真正开始（可能刚才在弹权限对话框）
             await self.voiceStartTask?.value
             self.voiceStartTask = nil
+            guard !Task.isCancelled else { return }
             
             // 启动阶段已经报过错（权限被拒、没有输入设备），就不要再覆盖成「没听清」
-            guard self.voiceError == nil else { return }
+            guard self.voiceError == nil else {
+                self.onNeedsForeground?()
+                return
+            }
             
             Diagnostics.log("voice: 松开  准备抓选中内容=\(shouldCapture)")
             
-            var captured: SelectionProvider.Capture?
-            if shouldCapture {
+            // 抓选区和等最终转写并行，别让用户松手后再等两个串行的超时。
+            async let capturedResult: SelectionProvider.Capture? = {
+                guard shouldCapture else { return nil }
                 // 松手后等一下再抓：让 ⌥ 彻底松开，
                 // 否则合成出来的是 ⌥⌘C，很多 App 不认
                 try? await Task.sleep(nanoseconds: 80_000_000)
-                captured = await SelectionProvider.capture()
-            }
+                return await SelectionProvider.capture()
+            }()
+            async let spokenResult: String = self.voice.finish()
             
-            let spoken = await self.voice.finish()
+            let captured = await capturedResult
+            let spoken = await spokenResult
+            guard !Task.isCancelled else { return }
+            
+            if let captured {
+                self.lastSourceApp = captured.sourceApp
+                if !captured.isEmpty {
+                    self.context = captured
+                    Diagnostics.log("voice: 附带上下文  文本=\(captured.text?.count ?? 0)字  图片=\(captured.image != nil ? "有" : "无")")
+                } else {
+                    Diagnostics.log("voice: 没有拿到上下文，只发语音指令")
+                }
+            }
             
             // 抓取已完成，现在可以安全地把面板提到前台
             self.onNeedsForeground?()
             
-            if let captured, !captured.isEmpty {
-                self.context = captured
-                Diagnostics.log("voice: 附带上下文  文本=\(captured.text?.count ?? 0)字  图片=\(captured.image != nil ? "有" : "无")")
-            } else {
-                Diagnostics.log("voice: 没有拿到上下文，只发语音指令")
-            }
-            
             let text = spoken.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else {
-                self.voiceError = "没听清，再按一次试试"
+                self.voiceError = "没听清，再按住说一次"
+                self.requestFocus()
                 return
             }
             
@@ -776,14 +873,17 @@ final class ChatViewModel: ObservableObject {
         previewImage = nil
     }
     
-    /// 取消当前录音（点按误判、用户改主意等），不留任何痕迹
+    /// 取消当前录音 / 收尾（点按误判、用户改主意等），不留任何痕迹
     func cancelVoice() {
         voice.cancel()
         isListening = false
+        isTranscribing = false
         voiceTimeoutTask?.cancel()
         voiceTimeoutTask = nil
         voiceStartTask?.cancel()
         voiceStartTask = nil
+        voiceFinalizeTask?.cancel()
+        voiceFinalizeTask = nil
         wantsSelection = false
     }
     
@@ -801,6 +901,7 @@ final class ChatViewModel: ObservableObject {
     /// 生图：输入是提示词，上下文里的图片（截图/复制）作为参考图。
     /// 生成结果作为 assistant 消息里的 generatedImage 展示。
     func sendImagePrompt() {
+        guard Self.imageGenerationEnabled else { return }
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isGeneratingImage, !isStreaming else { return }
         
@@ -813,6 +914,7 @@ final class ChatViewModel: ObservableObject {
     /// 生图的完整入口：校验 → 用户消息（含参考图）→ 占位消息 → 真正执行。
     /// `sendImagePrompt` 与「重试」共用。
     private func generateImage(prompt: String, reference: ImageAttachment?) {
+        guard Self.imageGenerationEnabled else { return }
         let manager = engineManager
         guard !manager.imageGenAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             errorMessage = "还没有配置生图服务：设置 ▸ 通用 ▸ 生图，填入 API Key"
@@ -836,6 +938,7 @@ final class ChatViewModel: ObservableObject {
         placeholderId: UUID,
         manager: EngineManager
     ) {
+        guard Self.imageGenerationEnabled else { return }
         errorMessage = nil
         isGeneratingImage = true
         retryable = .imagePrompt(text: prompt, reference: reference)
@@ -1025,6 +1128,14 @@ final class ChatViewModel: ObservableObject {
                     if Task.isCancelled { break }
                     received = true
                     self.lastStreamActivity = Date()
+
+                    // v5：生图路由关闭时，模型输出什么就显示什么，
+                    // 不再解析标记块，也不再把「画一张…」偷偷送去生图。
+                    guard Self.imageGenerationEnabled else {
+                        self.append(chunk, to: placeholderId)
+                        continue
+                    }
+
                     buffer += chunk
 
                     // 展示部分：把标记块从流里剥掉，只吐出干净文字
@@ -1047,27 +1158,29 @@ final class ChatViewModel: ObservableObject {
                     }
                 }
 
-                // 兜底 1：标记没在开头（模型先说了一句话才给标记），流结束后全文再找一遍
-                if !generationStarted, let result = ImageGenIntentMarker.extractFull(buffer) {
-                    generationStarted = true
-                    self.replacePlaceholderText(result.clean, placeholderId: placeholderId)
-                    let prompt = self.resolveImagePrompt(result.prompt, fallbackUserText: self.lastUserText())
-                    Diagnostics.log("auto-gen: 标记命中（流后兜底）  提示词=\(prompt.prefix(80))")
-                    self.startAutoGeneration(
-                        prompt: prompt,
-                        placeholderId: placeholderId,
-                        reference: reference
-                    )
-                }
+                if Self.imageGenerationEnabled {
+                    // 兜底 1：标记没在开头（模型先说了一句话才给标记），流结束后全文再找一遍
+                    if !generationStarted, let result = ImageGenIntentMarker.extractFull(buffer) {
+                        generationStarted = true
+                        self.replacePlaceholderText(result.clean, placeholderId: placeholderId)
+                        let prompt = self.resolveImagePrompt(result.prompt, fallbackUserText: self.lastUserText())
+                        Diagnostics.log("auto-gen: 标记命中（流后兜底）  提示词=\(prompt.prefix(80))")
+                        self.startAutoGeneration(
+                            prompt: prompt,
+                            placeholderId: placeholderId,
+                            reference: reference
+                        )
+                    }
 
-                // 兜底 2：模型输出了一个没闭合/写错的标记，整段文字被剥掉没显示出来 → 原样恢复
-                if !generationStarted,
-                   let index = self.messages.firstIndex(where: { $0.id == placeholderId }),
-                   self.messages[index].content.isEmpty, !buffer.isEmpty {
-                    self.replacePlaceholderText(
-                        buffer.trimmingCharacters(in: .whitespacesAndNewlines),
-                        placeholderId: placeholderId
-                    )
+                    // 兜底 2：模型输出了一个没闭合/写错的标记，整段文字被剥掉没显示出来 → 原样恢复
+                    if !generationStarted,
+                       let index = self.messages.firstIndex(where: { $0.id == placeholderId }),
+                       self.messages[index].content.isEmpty, !buffer.isEmpty {
+                        self.replacePlaceholderText(
+                            buffer.trimmingCharacters(in: .whitespacesAndNewlines),
+                            placeholderId: placeholderId
+                        )
+                    }
                 }
 
                 guard self.activeStreamId == streamId else {
@@ -1131,6 +1244,7 @@ final class ChatViewModel: ObservableObject {
     /// 自动路由触发的生图：结果先挂到 pending，等流结束再贴到占位消息上
     /// （保证「文字在前、图片在后」的顺序不会被并发打乱）
     private func startAutoGeneration(prompt: String, placeholderId: UUID, reference: ImageAttachment?) {
+        guard Self.imageGenerationEnabled else { return }
         let manager = engineManager
         guard !manager.imageGenAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             errorMessage = "模型想生成图片，但还没有配置生图服务：设置 ▸ 通用 ▸ 生图，填入 API Key"
@@ -1209,7 +1323,8 @@ final class ChatViewModel: ObservableObject {
         if activeAction == .chat {
             var prompt = engineManager.chatSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
             // 生图服务可用时才附加路由规则，避免没有生图 Key 时模型白打标记
-            if !engineManager.imageGenAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if Self.imageGenerationEnabled,
+               !engineManager.imageGenAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 prompt = prompt.isEmpty
                     ? ImageGenIntentMarker.routingInstruction
                     : prompt + "\n\n" + ImageGenIntentMarker.routingInstruction

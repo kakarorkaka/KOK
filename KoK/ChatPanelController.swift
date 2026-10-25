@@ -60,15 +60,55 @@ final class ChatPanelController: PanelController {
             self?.hideWindow()
         }
         
-        // Esc：先关图片预览，没有预览才收面板
+        // Esc：录音中先取消录音；有图片预览先关预览；否则收面板
         onEscape = { [weak self] in
             guard let self else { return }
-            if self.viewModel.previewImage != nil {
+            if self.viewModel.isListening {
+                self.viewModel.cancelVoice()
+                self.hideWindow()
+            } else if self.viewModel.previewImage != nil {
                 self.viewModel.closePreview()
             } else {
                 self.hideWindow()
             }
         }
+        
+        onKeyDown = { [weak self] event in
+            self?.handlePanelShortcut(event) ?? false
+        }
+    }
+    
+    // MARK: - 面板内快捷键
+    
+    /// ⌘↩ 替换 / ⌘C 复制 / ⌘R 重译。
+    /// 输入框里已经选中文字时，⌘C 让给系统复制，不抢用户的操作。
+    private func handlePanelShortcut(_ event: NSEvent) -> Bool {
+        guard panel?.isKeyWindow == true,
+              event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command)
+        else { return false }
+        
+        switch event.keyCode {
+        case 36, 76: // Return / Enter
+            guard viewModel.canReplace else { return false }
+            viewModel.replaceSelection()
+            return true
+        case 8: // C
+            guard !hasTextSelection else { return false }
+            guard viewModel.canCopyResult else { return false }
+            viewModel.copyLastResult()
+            return true
+        case 15: // R
+            guard viewModel.canRetranslate else { return false }
+            viewModel.retranslate()
+            return true
+        default:
+            return false
+        }
+    }
+    
+    private var hasTextSelection: Bool {
+        guard let textView = NSApp.keyWindow?.firstResponder as? NSTextView else { return false }
+        return textView.selectedRange().length > 0
     }
     
     // MARK: - 入口一：⌘2（抓取 → 立即处理）
@@ -145,4 +185,53 @@ final class ChatPanelController: PanelController {
     func captureScreenshot() {
         viewModel.captureScreenshot()
     }
+    
+    #if DEBUG
+    /// 调试用：离屏渲染三种面板状态，方便在没有录屏权限时检查布局。
+    func debugRenderPreview() {
+        let sampleSource = "Hello world. This is a sample translation."
+        let sampleResult = "你好，世界。这是一段示例译文。"
+        
+        let translateVM = ChatViewModel()
+        translateVM.prepareForNewOpening()
+        translateVM.activeAction = .translate
+        translateVM.messages = [
+            ChatMessage(role: .user, parts: [.text(sampleSource)], hidden: true),
+            ChatMessage(
+                role: .assistant,
+                parts: [.text(sampleResult)],
+                transformSource: sampleSource,
+                transformActionId: ChatAction.translate.rawValue
+            ),
+        ]
+        renderPreview(ChatView(viewModel: translateVM), to: "/tmp/kok-preview-translate.png")
+        
+        let emptyVM = ChatViewModel()
+        emptyVM.prepareForNewOpening()
+        emptyVM.activeAction = .translate
+        renderPreview(ChatView(viewModel: emptyVM), to: "/tmp/kok-preview-empty.png")
+        
+        let voiceVM = ChatViewModel()
+        voiceVM.prepareForNewOpening()
+        voiceVM.activeAction = .chat
+        voiceVM.isListening = true
+        voiceVM.voice.debugConfigure(transcript: "这个 API 的 error 怎么解？", level: 0.62)
+        renderPreview(ChatView(viewModel: voiceVM), to: "/tmp/kok-preview-voice.png")
+        
+        Diagnostics.log("debug: panel previews rendered")
+    }
+    
+    private func renderPreview<V: View>(_ view: V, to path: String) {
+        let size = NSSize(width: preferredWidth, height: preferredHeight)
+        let hosting = NSHostingView(rootView: view)
+        hosting.frame = NSRect(origin: .zero, size: size)
+        hosting.layoutSubtreeIfNeeded()
+        
+        guard let rep = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else { return }
+        hosting.cacheDisplay(in: hosting.bounds, to: rep)
+        guard let data = rep.representation(using: .png, properties: [:]) else { return }
+        try? data.write(to: URL(fileURLWithPath: path))
+        Diagnostics.log("debug: rendered \(path)")
+    }
+    #endif
 }

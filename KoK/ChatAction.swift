@@ -6,16 +6,16 @@
 //  （抓取 → 组装上下文 → 调模型 → 呈现），动作只决定这次用什么提示词、
 //  要不要输入、要不要语言方向、走翻译专线还是对话引擎。
 //
-//  形态分层：
-//  - 默认形态：每个面板有自己的默认动作（翻译面板=翻译，对话面板=问答）
-//  - 预设形态：下面的 4 个内置动作，点胶囊一键切换
-//  - 自定义形态：以后可扩展为用户自建动作，挂在同一排胶囊上
+//  v5 的形态：
+//  - 翻译是一键主动作（⌘2 → 抓取 → 立即翻译）
+//  - 其余能力走语音/文字提问，不再做成一排需要先选的动作胶囊
+//  - 总结/润色保留在枚举里，只为兼容旧结果历史的解码与「重用」
 //
 
 import Foundation
 import SwiftUI
 
-enum ChatAction: String, CaseIterable, Identifiable {
+enum ChatAction: String, Identifiable {
     case translate
     case summarize
     case polish
@@ -41,9 +41,6 @@ enum ChatAction: String, CaseIterable, Identifiable {
         }
     }
     
-    /// 需输入型：要用户打字（或语音）说明意图；其余是零输入型，抓到文本立即执行
-    var needsInput: Bool { self == .chat }
-    
     /// 语言方向选择只对翻译有意义
     var supportsDirection: Bool { self == .translate }
     
@@ -63,7 +60,5 @@ enum ChatAction: String, CaseIterable, Identifiable {
         }
     }
     
-    /// 对话面板展示的动作（翻译是翻译面板的专属动作，在对话里没有意义）
-    static let chatPanelActions: [ChatAction] = [.chat, .summarize, .polish]
 }
 

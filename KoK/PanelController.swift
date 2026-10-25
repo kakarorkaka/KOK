@@ -35,6 +35,9 @@ class PanelController: NSObject, NSWindowDelegate {
     /// Esc 键行为，默认直接隐藏
     var onEscape: (() -> Void)?
     
+    /// 面板内的其它快捷键（⌘↩ / ⌘C / ⌘R 等）。返回 true 表示已消费。
+    var onKeyDown: ((NSEvent) -> Bool)?
+    
     /// 即将显示时调用，用于与其它面板互斥
     var onWillShow: (() -> Void)?
     
@@ -158,15 +161,24 @@ class PanelController: NSObject, NSWindowDelegate {
             self?.hideWindow()
         }
         
-        // Esc 关闭
+        // Esc 关闭；其余快捷键交给子类（翻译卡片的 ⌘↩ / ⌘C / ⌘R）
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, event.keyCode == 53 else { return event }
-            if let onEscape = self.onEscape {
-                onEscape()
-            } else {
-                self.hideWindow()
+            guard let self else { return event }
+            
+            if event.keyCode == 53 {
+                if let onEscape = self.onEscape {
+                    onEscape()
+                } else {
+                    self.hideWindow()
+                }
+                return nil
             }
-            return nil
+            
+            if let onKeyDown, onKeyDown(event) {
+                return nil
+            }
+            
+            return event
         }
     }
     

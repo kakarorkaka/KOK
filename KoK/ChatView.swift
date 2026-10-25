@@ -36,21 +36,20 @@ struct ChatView: View {
             } else {
                 VStack(spacing: 0) {
                     toolbar
-                    Divider()
-                    transcript
+                    if visibleMessages.isEmpty {
+                        emptyState
+                    } else {
+                        transcript
+                    }
                     if let error = viewModel.errorMessage {
-                        Divider()
                         errorBanner(error)
                     }
                     if let voiceError = viewModel.voiceError {
-                        Divider()
                         voiceErrorBanner(voiceError)
                     }
                     if viewModel.context != nil {
-                        Divider()
                         contextBar
                     }
-                    Divider()
                     inputBar
                 }
             }
@@ -60,7 +59,7 @@ struct ChatView: View {
         .cornerRadius(12)
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
         .onAppear { focusInput() }
@@ -153,16 +152,7 @@ struct ChatView: View {
     
     private var toolbar: some View {
         HStack(spacing: 8) {
-            Image(systemName: "character.book.closed.fill")
-                .foregroundColor(.purple)
-                .font(.system(size: 12))
-            
             engineMenu
-            
-            // 语言方向只对翻译动作有意义
-            if viewModel.activeAction.supportsDirection {
-                directionMenu
-            }
             
             Spacer()
             
@@ -174,22 +164,22 @@ struct ChatView: View {
             }
             .buttonStyle(IconButtonStyle())
             .disabled(viewModel.history.isEmpty)
-            .help(viewModel.history.isEmpty ? "暂无翻译历史" : "翻译历史")
+            .help(viewModel.history.isEmpty ? "暂无结果历史" : "结果历史")
             .popover(isPresented: $showingHistory) {
                 HistoryPopover(viewModel: viewModel, isPresented: $showingHistory)
             }
             
-            // 停止不单独放工具栏了：发送键在生成时会变成停止键（见 inputBar），
-            // 少一个常驻图标，也少一次「该点哪个」的犹豫
-
-            Button { viewModel.clear() } label: {
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
+            // 「新对话」只在提问形态出现：翻译卡片不需要这个按钮
+            if viewModel.activeAction == .chat {
+                Button { viewModel.clear() } label: {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(IconButtonStyle())
+                .help("新对话")
+                .disabled(viewModel.messages.isEmpty)
             }
-            .buttonStyle(IconButtonStyle())
-            .help("新对话")
-            .disabled(viewModel.messages.isEmpty)
             
             Button { onDismiss?() } label: {
                 Image(systemName: "xmark")
@@ -199,8 +189,8 @@ struct ChatView: View {
             .buttonStyle(IconButtonStyle())
             .help("关闭 (Esc)")
         }
-        .padding(12)
-        .background(Color.primary.opacity(0.04))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
         .contentShape(Rectangle())
         .gesture(
             DragGesture(minimumDistance: 3)
@@ -224,66 +214,54 @@ struct ChatView: View {
         )
     }
     
-    // MARK: - 动作胶囊
+    // MARK: - 工具栏菜单
     
-    /// 引擎列表随动作切换：翻译用翻译引擎（可能是 DeepL），其余用对话引擎
+    /// 一个菜单同时管引擎和翻译方向，工具栏不再并排两个下拉。
     private var engineMenu: some View {
         Menu {
-            EngineMenuContent(
-                groups: viewModel.engineManager.engineGroups(chatOnly: !viewModel.activeAction.usesTranslationPath),
-                selectedId: viewModel.activeAction.usesTranslationPath
-                    ? viewModel.engineManager.selectedEngineId
-                    : viewModel.engineManager.selectedChatEngine?.id
-            ) { id in
-                viewModel.selectEngine(id: id)
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Text(viewModel.selectedEngineName)
-                    .font(.system(size: 12))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 9))
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(Color.primary.opacity(0.06))
-            .cornerRadius(6)
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-    }
-    
-    private var directionMenu: some View {
-        Menu {
-            ForEach(TranslateDirection.allCases) { dir in
-                Button(action: { viewModel.selectDirection(dir) }) {
-                    HStack {
-                        Text(dir.title)
-                        if dir == viewModel.direction {
-                            Image(systemName: "checkmark")
+            if viewModel.activeAction.supportsDirection {
+                Section("翻译方向") {
+                    ForEach(TranslateDirection.allCases) { dir in
+                        Button {
+                            viewModel.selectDirection(dir)
+                        } label: {
+                            HStack {
+                                Text(dir.title)
+                                if dir == viewModel.direction {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
                         }
                     }
                 }
             }
-        } label: {
-            HStack(spacing: 3) {
-                Image(systemName: "arrow.left.arrow.right")
-                    .font(.system(size: 9))
-                Text(viewModel.direction.title)
-                    .font(.system(size: 12))
-                    .lineLimit(1)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 9))
+            
+            Section("引擎") {
+                EngineMenuContent(
+                    groups: viewModel.engineManager.engineGroups(chatOnly: !viewModel.activeAction.usesTranslationPath),
+                    selectedId: viewModel.activeAction.usesTranslationPath
+                        ? viewModel.engineManager.selectedEngineId
+                        : viewModel.engineManager.selectedChatEngine?.id
+                ) { id in
+                    viewModel.selectEngine(id: id)
+                }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(Color.primary.opacity(0.06))
-            .cornerRadius(6)
+        } label: {
+            Text(toolbarMenuTitle)
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .padding(.vertical, 3)
+                .frame(maxWidth: 240, alignment: .leading)
         }
         .menuStyle(.borderlessButton)
-        .fixedSize()
+    }
+    
+    private var toolbarMenuTitle: String {
+        viewModel.activeAction.supportsDirection
+            ? "\(viewModel.selectedEngineName) · \(viewModel.direction.title)"
+            : viewModel.selectedEngineName
     }
     
     // MARK: - 消息区
@@ -292,10 +270,6 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    if visibleMessages.isEmpty {
-                        emptyHint
-                    }
-                    
                     ForEach(Array(visibleMessages.enumerated()), id: \.element.id) { index, message in
                         MessageRow(
                             message: message,
@@ -353,19 +327,26 @@ struct ChatView: View {
         viewModel.messages.filter { !$0.hidden }
     }
     
-    private var emptyHint: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("选中文字，按 \(translateShortcutText) 翻译")
-                .font(.system(size: 13, weight: .medium))
-            VStack(alignment: .leading, spacing: 3) {
-                Text("· 直接打字，或按住 \(chatShortcutText) 说话，问任何问题")
-                Text("· 译文可 ⌘↩ 替换回原处，⌘C 复制")
+    /// 空面板不铺一串说明，只在中间放一句此刻最有用的话。
+    private var emptyState: some View {
+        VStack(spacing: 6) {
+            if viewModel.activeAction == .chat {
+                Text("直接输入问题，或按住 \(chatShortcutText) 说话")
+                    .font(.system(size: 14, weight: .medium))
+                Text("选中文字会一起带上")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            } else {
+                Text("选中文字，按 \(translateShortcutText) 翻译")
+                    .font(.system(size: 14, weight: .medium))
+                Text("译文可 ⌘↩ 替换回原处")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
             }
-            .font(.caption)
-            .foregroundColor(.secondary)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 8)
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     
     private var translateShortcutText: String {
@@ -414,7 +395,7 @@ struct ChatView: View {
     private var inputBar: some View {
         HStack(alignment: .bottom, spacing: 8) {
             TextField(
-                "问点什么…（选中文字按 \(translateShortcutText) 翻译）",
+                "问点什么…",
                 text: $viewModel.input, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
@@ -457,7 +438,6 @@ struct ChatView: View {
             .help(isBusy ? "停止生成" : "发送 (↵)")
         }
         .padding(12)
-        .background(Color.primary.opacity(0.02))
     }
     
     // MARK: - 上下文 / 聆听
@@ -653,7 +633,7 @@ struct MessageRow: View {
     // MARK: - 变换卡片（原文 → 结果，带复制 / 替换）
     
     /// 就地反馈的复制按钮：点哪个就在哪个上显示「已复制」
-    private func copyButton(_ text: String, shortcut: String? = nil) -> some View {
+    private func copyButton(_ text: String) -> some View {
         Button {
             onCopy(text)
             copied = true
@@ -661,7 +641,7 @@ struct MessageRow: View {
                 copied = false
             }
         } label: {
-            Label(copied ? "已复制" : (shortcut.map { "\($0) 复制" } ?? "复制"),
+            Label(copied ? "已复制" : "复制",
                   systemImage: copied ? "checkmark" : "doc.on.doc")
                 .font(.system(size: 11))
         }
@@ -673,8 +653,6 @@ struct MessageRow: View {
     private var transformCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Image(systemName: message.transformAction?.icon ?? "wand.and.stars")
-                    .font(.system(size: 10))
                 Text(message.transformAction?.title ?? "处理")
                     .font(.system(size: 11, weight: .medium))
                 Spacer(minLength: 0)
@@ -723,22 +701,22 @@ struct MessageRow: View {
                     // 「替换」是翻译的主动作，放第一位；复制和重译次之。
                     HStack(spacing: 12) {
                         Button { onReplace() } label: {
-                            Label("⌘↩ 替换", systemImage: "arrow.triangle.2.circlepath")
+                            Label("替换", systemImage: "arrow.triangle.2.circlepath")
                                 .font(.system(size: 11, weight: .medium))
                         }
                         .buttonStyle(IconButtonStyle())
                         .foregroundColor(.accentColor)
-                        .help("⌘↩ 把译文替换回原处；可在来源 App 按 ⌘Z 撤销")
+                        .help("替换回原处（⌘↩）；可在来源 App 按 ⌘Z 撤销")
                         
-                        copyButton(message.content, shortcut: "⌘C")
+                        copyButton(message.content)
                         
                         Button { onRetranslate() } label: {
-                            Label("⌘R 重译", systemImage: "arrow.clockwise")
+                            Label("重译", systemImage: "arrow.clockwise")
                                 .font(.system(size: 11))
                         }
                         .buttonStyle(IconButtonStyle())
                         .foregroundColor(.secondary)
-                        .help("⌘R 重新翻译这段")
+                        .help("重新翻译这段（⌘R）")
                         
                         Spacer(minLength: 0)
                     }
@@ -751,7 +729,7 @@ struct MessageRow: View {
         .cornerRadius(10)
         .overlay(
             RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
         )
     }
     

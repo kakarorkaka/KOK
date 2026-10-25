@@ -28,7 +28,7 @@ enum ChatAction: String, Identifiable {
         case .translate: return "翻译"
         case .summarize: return "总结"
         case .polish: return "润色"
-        case .chat: return "问答"
+        case .chat: return "提问"
         }
     }
     

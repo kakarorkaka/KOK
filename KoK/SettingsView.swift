@@ -81,7 +81,7 @@ struct GeneralSettingsTab: View {
             } header: {
                 Text("快捷键")
             } footer: {
-                SettingsFooter("翻译是主入口：选中文字按一下直接翻译；对话是合并键——点按打开、按住说话。没反应时点「测试」。")
+                SettingsFooter("翻译是主入口：选中文字按一下直接翻译；提问是合并键——点按打开、按住说话。没反应时点「测试」。")
             }
             
             Section {

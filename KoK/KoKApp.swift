@@ -102,7 +102,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if event.type == .rightMouseUp {
             let menu = NSMenu()
             
-            let chatItem = NSMenuItem(title: "打开对话", action: #selector(openChat), keyEquivalent: "")
+            let chatItem = NSMenuItem(title: "打开提问", action: #selector(openChat), keyEquivalent: "")
             menu.addItem(chatItem)
             
             let settingsItem = NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ",")
@@ -120,7 +120,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             statusItem?.button?.performClick(nil)
             statusItem?.menu = nil
         } else {
-            // 左键 → 打开对话（最高频动作）；设置收进右键菜单
+            // 左键 → 打开提问（最高频动作）；设置收进右键菜单
             ChatPanelController.shared.openChat()
         }
     }

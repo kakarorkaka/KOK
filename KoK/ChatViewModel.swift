@@ -195,8 +195,8 @@ final class ChatViewModel: ObservableObject {
     
     var selectedEngineName: String {
         activeAction.usesTranslationPath
-            ? engineManager.selectedEngine?.name ?? "未选择"
-            : engineManager.selectedChatEngine?.name ?? "未选择"
+            ? engineManager.selectedEngine?.name ?? "选择引擎"
+            : engineManager.selectedChatEngine?.name ?? "选择引擎"
     }
     
     var canSend: Bool {

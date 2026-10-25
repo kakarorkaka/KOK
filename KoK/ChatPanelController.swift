@@ -2,17 +2,18 @@
 //  ChatPanelController.swift
 //  KoK
 //
-//  统一面板的窗口控制器（4.0：翻译面板与对话面板合并成一个）。
+//  统一面板的窗口控制器。
 //
-//  两个入口，同一个面板：
-//  - ⌘2 → 抓取选中内容，按当前动作立即处理（翻译 / 总结 / 润色）
-//  - ⌘3 → 点按打开面板问问题；按住说话（同一个键的点按/按住语义）
+//  v5 的两个入口，同一个面板：
+//  - ⌘2 → 抓取选中内容，立即翻译（唯一的零输入主动作）
+//  - ⌘3 → 点按打开提问；按住说话（同一个键的点按/按住语义）
 //
-//  面板高度自适应内容：只有一张卡片时保持紧凑，聊起来才变高。
+//  高度随形态切换：翻译卡片紧凑，语音是 HUD，提问再展开。
 //
 
 import AppKit
 import SwiftUI
+import Combine
 
 @MainActor
 final class ChatPanelController: PanelController {
@@ -24,8 +25,14 @@ final class ChatPanelController: PanelController {
     override var persistenceKey: String { "chat" }
     override var wantsSizePersistence: Bool { true }
     override var preferredHeight: CGFloat { 420 }
-    override var minimumSize: NSSize { NSSize(width: 360, height: 260) }
+    override var minimumSize: NSSize { NSSize(width: 360, height: 220) }
     override var maximumSize: NSSize { NSSize(width: 1000, height: 1000) }
+    
+    /// 翻译卡片只需要一张紧凑的卡；语音聆听再收成 HUD；提问/追问展开。
+    private let compactHeight: CGFloat = 240
+    private let voiceHeight: CGFloat = 320
+    private let conversationHeight: CGFloat = 420
+    private var cancellables = Set<AnyCancellable>()
     
     /// 点按与按住的分界。快速点按通常 50–150ms，刻意按住一般超过 250ms。
     private static let holdThreshold: TimeInterval = 0.18
@@ -76,6 +83,41 @@ final class ChatPanelController: PanelController {
         onKeyDown = { [weak self] event in
             self?.handlePanelShortcut(event) ?? false
         }
+        
+        // 从翻译卡片开始打字 / 进入提问时，把面板展开到对话高度；
+        // 已经更大的用户尺寸则保留。
+        viewModel.$activeAction
+            .dropFirst()
+            .sink { [weak self] action in
+                guard action == .chat else { return }
+                self?.resizeForConversation()
+            }
+            .store(in: &cancellables)
+        
+        // 语音收尾成功、已经把问题发出去之后，再从 HUD 展开成对话面板。
+        viewModel.$isTranscribing
+            .dropFirst()
+            .sink { [weak self] transcribing in
+                guard !transcribing, let self else { return }
+                guard self.viewModel.messages.contains(where: { $0.role == .user }) else { return }
+                self.resizeForConversation()
+            }
+            .store(in: &cancellables)
+    }
+    
+    // MARK: - 高度
+    
+    private func resizeForTranslation() {
+        setPanelHeight(compactHeight, animated: panel?.isVisible == true)
+    }
+    
+    private func resizeForVoice() {
+        setPanelHeight(voiceHeight, animated: panel?.isVisible == true)
+    }
+    
+    private func resizeForConversation() {
+        let current = panel?.frame.height ?? conversationHeight
+        setPanelHeight(max(current, conversationHeight), animated: panel?.isVisible == true)
     }
     
     // MARK: - 面板内快捷键
@@ -116,6 +158,9 @@ final class ChatPanelController: PanelController {
     /// 抓取选中内容并按当前动作处理。抓取期间不主动显示面板，
     /// 免得把面板自己截进选区，也免得抢走原 App 的焦点。
     func triggerTransform() {
+        // 面板开着的时候按 ⌘2，先让位，否则模拟 ⌘C 会打在 KoK 自己身上
+        if isVisible { hideWindow() }
+        resizeForTranslation()
         viewModel.prepareForNewOpening()
         viewModel.activeAction = .translate
         viewModel.beginTransform()
@@ -127,6 +172,7 @@ final class ChatPanelController: PanelController {
     /// 否则「按住问完 → 点按追问」会变成把面板关了。
     func openChat() {
         viewModel.activeAction = .chat
+        resizeForConversation()
         if !isVisible {
             showWindow(activate: true)
         } else {
@@ -141,6 +187,7 @@ final class ChatPanelController: PanelController {
     func chatKeyDown() {
         guard !isHolding else { return }
         
+        resizeForConversation()
         showWindow(activate: false, makeKey: false)
         
         holdTask?.cancel()
@@ -149,6 +196,8 @@ final class ChatPanelController: PanelController {
             guard !Task.isCancelled else { return }
             self?.isHolding = true
             self?.viewModel.activeAction = .chat
+            // 先让 activeAction 的展开跑完，再把面板收成聆听 HUD
+            self?.resizeForVoice()
             self?.viewModel.beginVoice(captureSelection: true)
         }
     }
@@ -204,25 +253,46 @@ final class ChatPanelController: PanelController {
                 transformActionId: ChatAction.translate.rawValue
             ),
         ]
-        renderPreview(ChatView(viewModel: translateVM), to: "/tmp/kok-preview-translate.png")
+        renderPreview(
+            ChatView(viewModel: translateVM),
+            height: compactHeight,
+            to: "/tmp/kok-preview-translate.png"
+        )
         
         let emptyVM = ChatViewModel()
         emptyVM.prepareForNewOpening()
         emptyVM.activeAction = .translate
-        renderPreview(ChatView(viewModel: emptyVM), to: "/tmp/kok-preview-empty.png")
+        renderPreview(
+            ChatView(viewModel: emptyVM),
+            height: compactHeight,
+            to: "/tmp/kok-preview-empty.png"
+        )
+        
+        let chatEmptyVM = ChatViewModel()
+        chatEmptyVM.prepareForNewOpening()
+        chatEmptyVM.activeAction = .chat
+        renderPreview(
+            ChatView(viewModel: chatEmptyVM),
+            height: conversationHeight,
+            to: "/tmp/kok-preview-chat-empty.png"
+        )
         
         let voiceVM = ChatViewModel()
         voiceVM.prepareForNewOpening()
         voiceVM.activeAction = .chat
         voiceVM.isListening = true
         voiceVM.voice.debugConfigure(transcript: "这个 API 的 error 怎么解？", level: 0.62)
-        renderPreview(ChatView(viewModel: voiceVM), to: "/tmp/kok-preview-voice.png")
+        renderPreview(
+            ChatView(viewModel: voiceVM),
+            height: voiceHeight,
+            to: "/tmp/kok-preview-voice.png"
+        )
         
         Diagnostics.log("debug: panel previews rendered")
     }
     
-    private func renderPreview<V: View>(_ view: V, to path: String) {
-        let size = NSSize(width: preferredWidth, height: preferredHeight)
+    private func renderPreview<V: View>(_ view: V, height: CGFloat, to path: String) {
+        let size = NSSize(width: preferredWidth, height: height)
         let hosting = NSHostingView(rootView: view)
         hosting.frame = NSRect(origin: .zero, size: size)
         hosting.layoutSubtreeIfNeeded()

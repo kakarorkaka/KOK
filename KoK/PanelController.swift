@@ -151,6 +151,38 @@ class PanelController: NSObject, NSWindowDelegate {
         isVisible ? hideWindow() : showWindow()
     }
     
+    /// 按内容形态调整高度：保持上沿位置不变，并夹在屏幕可见区域内。
+    /// 翻译卡片用紧凑高度，提问再展开，面板不会一直挂着一大块空白。
+    func setPanelHeight(_ height: CGFloat, animated: Bool = false) {
+        guard let panel else { return }
+        
+        let clamped = min(max(height, minimumSize.height), maximumSize.height)
+        guard abs(panel.frame.height - clamped) > 0.5 else { return }
+        
+        var frame = panel.frame
+        let top = frame.maxY
+        frame.size.height = clamped
+        frame.origin.y = top - clamped
+        
+        let center = NSPoint(x: frame.midX, y: frame.midY)
+        if let screen = NSScreen.screens.first(where: { $0.frame.contains(center) }) ?? NSScreen.main {
+            let visible = screen.visibleFrame
+            if frame.minY < visible.minY { frame.origin.y = visible.minY }
+            if frame.maxY > visible.maxY { frame.origin.y = visible.maxY - clamped }
+            if frame.maxX > visible.maxX { frame.origin.x = visible.maxX - frame.width }
+            if frame.minX < visible.minX { frame.origin.x = visible.minX }
+        }
+        
+        if animated, panel.isVisible {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.16
+                panel.animator().setFrame(frame, display: true)
+            }
+        } else {
+            panel.setFrame(frame, display: true)
+        }
+    }
+    
     // MARK: - 事件监听
     
     private func startMonitors() {

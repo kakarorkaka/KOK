@@ -63,7 +63,7 @@ final class ChatPanelController: PanelController {
         // Esc：录音中先取消录音；有图片预览先关预览；否则收面板
         onEscape = { [weak self] in
             guard let self else { return }
-            if self.viewModel.isListening {
+            if self.viewModel.isListening || self.viewModel.isTranscribing {
                 self.viewModel.cancelVoice()
                 self.hideWindow()
             } else if self.viewModel.previewImage != nil {

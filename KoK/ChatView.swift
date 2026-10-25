@@ -138,7 +138,7 @@ struct ChatView: View {
                 .padding(.horizontal, 28)
                 .animation(.easeOut(duration: 0.12), value: viewModel.voice.transcript)
 
-            Text(viewModel.isListening ? "松开即发送 · 点右上角取消" : "正在把这句话发出去…")
+            Text(viewModel.isListening ? "选中内容会一起带上 · 松开即发送" : "正在把这句话发出去…")
                 .font(.caption2)
                 .foregroundColor(.secondary)
 
@@ -1184,7 +1184,7 @@ struct HistoryPopover: View {
             HStack {
                 Text("结果历史")
                     .font(.headline)
-                Text("翻译 / 总结 / 润色 / 生图")
+                Text("最近 100 条")
                     .font(.caption2)
                     .foregroundColor(.secondary)
                 Spacer()

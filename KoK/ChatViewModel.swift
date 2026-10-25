@@ -683,6 +683,11 @@ final class ChatViewModel: ObservableObject {
     
     /// 每次面板重新打开时调用（⌘2 / ⌘3 各自的开场由控制器决定）
     func prepareForNewOpening() {
+        // 上一次语音还在录 / 还在收尾时，按 ⌘2 应该直接开始翻译，
+        // 不能让那条语音过一会儿又自己发出来。
+        if isListening || isTranscribing {
+            cancelVoice()
+        }
         errorMessage = nil
         voiceError = nil
         context = nil

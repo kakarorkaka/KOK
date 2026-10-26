@@ -19,14 +19,22 @@ struct ChatView: View {
     @FocusState private var inputFocused: Bool
     @State private var dragOffset: CGPoint?
     @State private var showingHistory = false
-    /// 是否停在底部（仅供用户滑动时判定）
-    @State private var isAtBottom = true
-    /// 是否跟随最新内容：只有用户主动往上滑才会关掉，
-    /// 这样出图 / 流式追加这类「内容增长」不会让新结果落在视野外
-    @State private var followTail = true
-    /// 用户是否正在自己滑动
-    @State private var userScrolling = false
-    @State private var lastMessageCount = 0
+    
+    /// 滚动判定状态。
+    ///
+    /// 这些值**只被滚动回调读取、不参与渲染**，所以刻意不放进 `@State`：
+    /// 之前用 @State 时，每一次滚动几何变化都会让整棵视图（含消息列表的
+    /// LazyVStack）重算，懒加载布局又反过来改变几何 —— 两者互相喂饭，
+    /// 主线程 100% 空转、界面彻底卡死（实测 3 小时 45 分 100% CPU）。
+    /// 放进普通类实例后，改字段不会触发视图刷新，这条回路就断了。
+    @State private var scrollState = ScrollState()
+    
+    final class ScrollState {
+        var isAtBottom = true
+        var followTail = true
+        var userScrolling = false
+        var lastMessageCount = 0
+    }
     
     private let bottomAnchor = "chat-bottom"
     
@@ -277,24 +285,24 @@ struct ChatView: View {
                 // 程序滚动 / 内容增长引起的几何变化不算（否则流式输出会把跟随关掉）
                 switch phase {
                 case .tracking, .interacting, .decelerating:
-                    userScrolling = true
+                    scrollState.userScrolling = true
                 default:
-                    userScrolling = false
+                    scrollState.userScrolling = false
                 }
             }
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 // 距底部 40pt 以内算「贴着底」
                 geometry.contentSize.height - geometry.contentOffset.y - geometry.containerSize.height < 40
             } action: { _, atBottom in
-                isAtBottom = atBottom
-                if userScrolling { followTail = atBottom }
+                scrollState.isAtBottom = atBottom
+                if scrollState.userScrolling { scrollState.followTail = atBottom }
             }
             .onChange(of: viewModel.messages) { _, newValue in
-                let isNewMessage = newValue.count != lastMessageCount
-                lastMessageCount = newValue.count
+                let isNewMessage = newValue.count != scrollState.lastMessageCount
+                scrollState.lastMessageCount = newValue.count
                 // 用户自己发了新消息：无论之前在哪，都跟到底
-                if isNewMessage, newValue.last?.role == .user { followTail = true }
-                guard followTail else { return }
+                if isNewMessage, newValue.last?.role == .user { scrollState.followTail = true }
+                guard scrollState.followTail else { return }
                 withAnimation(.easeOut(duration: 0.12)) {
                     proxy.scrollTo(bottomAnchor, anchor: .bottom)
                 }
@@ -581,7 +589,7 @@ struct IconButtonStyle: ButtonStyle {
                         .fill(Color.primary.opacity(configuration.isPressed ? 0.14 : (hovering ? 0.08 : 0)))
                 )
                 .contentShape(RoundedRectangle(cornerRadius: 6))
-                .onHover { hovering = $0 }
+                .onHover { if hovering != $0 { hovering = $0 } }
         }
     }
 }

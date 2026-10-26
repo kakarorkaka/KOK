@@ -158,11 +158,38 @@ enum ServiceError: LocalizedError {
         case .missingAPIKey(let name):
             return "请在设置中填入 \(name) 的 API Key"
         case .apiError(let name, let detail):
-            return "\(name) 接口错误: \(detail)"
+            return "\(name) 接口错误: \(Self.friendlyMessage(detail))"
         case .unsupportedEngine(let name):
             return "\(name) 不支持对话，请改用 OpenAI 兼容或 Gemini 引擎"
         case .emptyResponse(let name):
             return "\(name) 没有返回内容"
         }
+    }
+    
+    /// 把服务商返回的原始 JSON 翻译成一句能看懂的话（保留摘要便于排查）。
+    private static func friendlyMessage(_ detail: String) -> String {
+        let lower = detail.lowercased()
+        
+        let hint: String?
+        if lower.contains("insufficient balance") || lower.contains("insufficient_quota")
+            || lower.contains("quota exceeded") || detail.contains("余额不足") {
+            hint = "账户余额不足，请到服务商后台充值，或换一个引擎"
+        } else if lower.contains("invalid_api_key") || lower.contains("invalid api key")
+                    || lower.contains("unauthorized") || lower.contains("401") {
+            hint = "API Key 无效或已过期，请到设置里重新填写"
+        } else if lower.contains("rate limit") || lower.contains("too many requests")
+                    || lower.contains("429") {
+            hint = "请求过于频繁，稍等几秒再试"
+        } else if lower.contains("context_length_exceeded") || lower.contains("maximum context") {
+            hint = "内容太长超出了模型上下文，试试选中更少的内容"
+        } else if lower.contains("service unavailable") || lower.contains("overloaded")
+                    || lower.contains("502") || lower.contains("503") {
+            hint = "服务商暂时不可用，稍后再试"
+        } else {
+            hint = nil
+        }
+        
+        guard let hint else { return String(detail.prefix(200)) }
+        return "\(hint)\n原始信息：\(String(detail.prefix(140)))"
     }
 }

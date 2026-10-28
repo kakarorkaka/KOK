@@ -61,6 +61,8 @@ final class VoiceInputService: ObservableObject {
     @Published private(set) var errorMessage: String?
     /// 0...1 的实时输入电平，只用来画「它在听」的音量条
     @Published private(set) var audioLevel: CGFloat = 0
+    /// 上次发布电平的时间（限流用）
+    private var lastLevelPublish = Date.distantPast
     
     /// 兜底：万一「松开」事件丢了，录音也不会一直开着
     static let maxRecordingSeconds: TimeInterval = 60
@@ -151,10 +153,18 @@ final class VoiceInputService: ObservableObject {
         
         input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
             request.append(buffer)
+            // 电平限流：音频缓冲约每 46ms 一次，原样发布等于每秒二十多次
+            // 整棵面板重建，波形动画永远播不完 —— 这是卡死的一个诱因。
+            // 这里限到 ~12 次/秒，并忽略肉眼看不出的微小变化。
             let level = Self.level(from: buffer)
             Task { @MainActor [weak self] in
                 guard let self, self.isRecording else { return }
-                self.audioLevel = self.audioLevel * 0.55 + level * 0.45
+                let now = Date()
+                guard now.timeIntervalSince(self.lastLevelPublish) >= 0.08 else { return }
+                let smoothed = self.audioLevel * 0.55 + level * 0.45
+                guard abs(smoothed - self.audioLevel) > 0.015 else { return }
+                self.lastLevelPublish = now
+                self.audioLevel = smoothed
             }
         }
         isTapInstalled = true

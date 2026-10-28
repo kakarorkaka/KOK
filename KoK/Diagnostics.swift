@@ -33,6 +33,18 @@ enum Diagnostics {
         return formatter
     }()
     
+    /// 主线程心跳：每秒把时间戳覆盖写进 heartbeat.txt。
+    ///
+    /// 界面上冻住时，这个文件不再更新 —— 它的修改时间就是「最后还活着」的时刻。
+    /// 和 diagnostics.log 的最后一行对照，就能锁定是哪个动作之后卡住的。
+    /// 常开（不依赖 diagnostics.enabled），每次只写几十字节。
+    static func heartbeat() {
+        let stamp = formatter.string(from: Date())
+        try? stamp.data(using: .utf8)?.write(to: heartbeatURL, options: .atomic)
+    }
+    
+    private static var heartbeatURL: URL { directory.appendingPathComponent("heartbeat.txt") }
+    
     static func log(_ message: String) {
         guard isEnabled else { return }
         

@@ -33,6 +33,7 @@ struct ChatView: View {
         var followTail = true
         var userScrolling = false
         var lastMessageCount = 0
+        var lastScrollAt = Date.distantPast
     }
     
     private let bottomAnchor = "chat-bottom"
@@ -323,7 +324,18 @@ struct ChatView: View {
                 // 用户自己发了新消息：无论之前在哪，都跟到底
                 if isNewMessage, newValue.last?.role == .user { scrollState.followTail = true }
                 guard scrollState.followTail else { return }
-                withAnimation(.easeOut(duration: 0.12)) {
+                
+                // 流式输出时每个 token 都会改 messages，如果每次都带动画滚到底，
+                // 就会变成「动画永远播不完」的持续布局 —— 大幅限流，并且流式期间不用动画。
+                let now = Date()
+                guard isNewMessage || now.timeIntervalSince(scrollState.lastScrollAt) >= 0.12 else { return }
+                scrollState.lastScrollAt = now
+                
+                if isNewMessage && !viewModel.isStreaming {
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        proxy.scrollTo(bottomAnchor, anchor: .bottom)
+                    }
+                } else {
                     proxy.scrollTo(bottomAnchor, anchor: .bottom)
                 }
             }
@@ -541,7 +553,6 @@ private struct VoiceLevelView: View {
             }
         }
         .frame(height: 38)
-        .animation(.easeOut(duration: 0.08), value: level)
         .accessibilityHidden(true)
     }
 

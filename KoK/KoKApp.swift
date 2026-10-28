@@ -24,6 +24,8 @@ struct KoKApp: App {
 class AppDelegate: NSObject, NSApplicationDelegate {
     
     var statusItem: NSStatusItem?
+    /// 主线程心跳（见 Diagnostics.heartbeat）：界面冻住时它会停止更新
+    private var heartbeatTimer: Timer?
     private var settingsWindow: NSWindow?
     private var onboardingPopover: NSPopover?
     #if DEBUG
@@ -50,6 +52,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         HotKeyManager.shared.handlers[.screenshot] = {
             ChatPanelController.shared.captureScreenshot()
+        }
+        
+        // 2.5 主线程心跳：每秒一次，冻住时文件停更，便于事后定位
+        Diagnostics.heartbeat()
+        heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            Diagnostics.heartbeat()
         }
         
         // 3. 初始化状态栏

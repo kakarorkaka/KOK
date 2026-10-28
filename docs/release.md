@@ -56,12 +56,12 @@ spctl --assess --type execute --verbose=4 \
 ## 3. 发布到 GitHub Releases
 
 ```bash
-git tag v5.2
-git push origin v5.2
+git tag v5.3
+git push origin v5.3
 
-gh release create v5.2 build/release/KoK-5.2.dmg \
-  --title "KoK 5.2" \
-  --notes-file docs/release-notes-5.2.md
+gh release create v5.3 build/release/KoK-5.3.dmg \
+  --title "KoK 5.3" \
+  --notes-file docs/release-notes-5.3.md
 ```
 
 README 的「下载」指向：

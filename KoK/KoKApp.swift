@@ -105,6 +105,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let chatItem = NSMenuItem(title: "打开提问", action: #selector(openChat), keyEquivalent: "")
             menu.addItem(chatItem)
             
+            let shotItem = NSMenuItem(title: "截图并复制", action: #selector(captureScreenshot), keyEquivalent: "")
+            menu.addItem(shotItem)
+            
+            menu.addItem(NSMenuItem.separator())
+            
             let settingsItem = NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ",")
             menu.addItem(settingsItem)
             
@@ -153,6 +158,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     @objc func openChat() {
         ChatPanelController.shared.openChat()
+    }
+    
+    @objc func captureScreenshot() {
+        ChatPanelController.shared.captureScreenshot()
     }
     
     @objc func openSettings() {

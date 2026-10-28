@@ -26,7 +26,7 @@ enum HotKeyAction: String, CaseIterable, Identifiable {
         switch self {
         case .translate: return "翻译"
         case .chat: return "提问"
-        case .screenshot: return "截图"
+        case .screenshot: return "截图并复制"
         }
     }
     
@@ -34,7 +34,7 @@ enum HotKeyAction: String, CaseIterable, Identifiable {
     var hint: String? {
         switch self {
         case .chat: return "点按提问，按住说话（带选中内容）"
-        case .screenshot: return "框选屏幕区域，作为上下文"
+        case .screenshot: return "框选屏幕区域，直接复制到剪贴板"
         default: return nil
         }
     }

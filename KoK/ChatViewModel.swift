@@ -991,29 +991,6 @@ final class ChatViewModel: ObservableObject {
         Diagnostics.log("imagegen: 图片已贴到消息  \(image.dimensionText) \(image.sizeText)")
     }
     
-    // MARK: - 截图
-    
-    /// 框选屏幕区域，作为上下文。之后可以打字或按住 ⌥V 说话再一起发出。
-    func captureScreenshot() {
-        voiceError = nil
-        errorMessage = nil
-        
-        Task { [weak self] in
-            guard let self else { return }
-            
-            do {
-                let image = try await ScreenshotCapture.captureInteractive()
-                self.context = SelectionProvider.Capture(text: nil, image: image)
-            } catch ScreenshotCapture.CaptureError.cancelled {
-                return   // 用户按 Esc 取消，不打扰
-            } catch {
-                self.voiceError = error.localizedDescription
-            }
-            
-            self.onNeedsForeground?()
-        }
-    }
-    
     func regenerate() {
         guard !isStreaming, let config = engineManager.selectedChatEngine else { return }
         if messages.last?.role == .assistant { messages.removeLast() }

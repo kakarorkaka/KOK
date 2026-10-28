@@ -230,9 +230,20 @@ final class ChatPanelController: PanelController {
     
     // MARK: - 截图
     
-    /// 框选屏幕区域作为上下文。截图期间不显示面板，免得被截进去。
+    /// 独立截图：框选后直接放进剪贴板，不打开提问面板、不抢焦点。
     func captureScreenshot() {
-        viewModel.captureScreenshot()
+        Task { @MainActor in
+            do {
+                try await ScreenshotCapture.copyInteractiveToPasteboard()
+            } catch ScreenshotCapture.CaptureError.cancelled {
+                // 用户按 Esc / 取消，不打扰
+            } catch ScreenshotCapture.CaptureError.permissionDenied {
+                // requestPermission 已经弹了系统引导
+            } catch {
+                NSSound.beep()
+                Diagnostics.log("screenshot: 失败 \(error.localizedDescription)")
+            }
+        }
     }
     
     #if DEBUG

@@ -2,13 +2,12 @@
 //  ScreenshotCapture.swift
 //  KoK
 //
-//  框选屏幕区域作为上下文。
+//  独立截图：框选屏幕区域，直接把原图放进剪贴板。
 //
-//  为什么需要它：macOS 的辅助功能 API 只暴露「选中的文本」，没有「选中的图片」。
-//  图片只能靠各 App 自己把位图写进剪贴板，所以 PDF 阅读器、微信、部分 Electron
-//  应用里根本抓不到。截图不依赖任何 App——像素由我们自己从屏幕上取。
+//  为什么用系统的交互式截图（⇧⌘4 那套 UI）：用户已经会用了；
+//  不自己造选择框，也不把截图先塞进提问面板。
 //
-//  用系统的交互式截图（⇧⌘4 那套 UI），不自己造选择框：用户已经会用了。
+//  截图原图不经过「送模型前压缩」那条链路——粘贴到别的 App 时应该保持原始分辨率。
 //
 
 import AppKit
@@ -44,8 +43,9 @@ enum ScreenshotCapture {
         CGRequestScreenCaptureAccess()
     }
     
-    /// 调系统的交互式截图；用户框选或按 Esc 取消
-    static func captureInteractive() async throws -> ImageAttachment {
+    /// 调系统的交互式截图；用户框选或按 Esc 取消。
+    /// 返回原始 PNG 数据，不做缩放。
+    static func captureInteractivePNG() async throws -> Data {
         guard hasPermission else {
             requestPermission()
             throw CaptureError.permissionDenied
@@ -79,11 +79,30 @@ enum ScreenshotCapture {
             throw CaptureError.cancelled
         }
         
-        guard let image = ImageEncoder.encode(data: data) else {
+        return data
+    }
+    
+    /// 框选后直接复制到剪贴板：不打开面板、不进入对话。
+    static func copyInteractiveToPasteboard() async throws {
+        let data = try await captureInteractivePNG()
+        
+        guard let image = NSImage(data: data) else {
             throw CaptureError.failed("无法解析截到的图")
         }
         
-        Diagnostics.log("screenshot: 成功  \(image.dimensionText)  \(image.sizeText)")
-        return image
+        // 同时给 PNG 和 TIFF：大多数 App 吃 PNG，少数老 App / 设计工具认 TIFF。
+        let item = NSPasteboardItem()
+        item.setData(data, forType: .png)
+        if let tiff = image.tiffRepresentation {
+            item.setData(tiff, forType: .tiff)
+        }
+        
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        guard pasteboard.writeObjects([item]) else {
+            throw CaptureError.failed("写入剪贴板失败")
+        }
+        
+        Diagnostics.log("screenshot: 已复制到剪贴板  \(Int(image.size.width))×\(Int(image.size.height))")
     }
 }

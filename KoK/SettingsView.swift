@@ -98,7 +98,7 @@ struct GeneralSettingsTab: View {
                 }
                 
                 if !screenRecordingAuthorized {
-                    permissionRow("需要屏幕录制权限（截图用）") {
+                    permissionRow("需要屏幕录制权限（截图并复制用）") {
                         ScreenshotCapture.requestPermission()
                         refreshPermissions()
                     }
